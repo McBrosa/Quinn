@@ -1,5 +1,6 @@
 pub mod bru;
 pub mod collection;
+pub mod editor;
 pub mod engine;
 pub mod error;
 pub mod variables;

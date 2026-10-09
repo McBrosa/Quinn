@@ -16,6 +16,17 @@ Directory discovery does not follow symbolic links.
 Requests run by folder path, then numeric `meta.seq`, then file path.
 This ordering is deterministic but does not reproduce Bruno's complete folder sequencing behavior.
 The desktop keeps the original source until the user edits it.
+
+Forms patch only changed fields and blocks. Untouched entries, comments, scripts,
+and unknown fields retain their original source bytes.
+The Source tab remains available for malformed files and non-HTTP requests.
+Save and Send apply form drafts first. Invalid form edits do not replace Source.
+
+Forms include enabled/list dictionary rows and multiline values, authentication fields,
+body text, upload entries, and GraphQL variables.
+Triple-quote delimiters inside multiline dictionary values require Source editing.
+The forms do not provide syntax highlighting, schema validation, or protocol-specific editors.
+
 Save validates the block structure, checks the original file contents, and replaces the file atomically.
 
 The parser supports CRLF, a UTF-8 byte-order mark, quoted dictionary keys, disabled pairs, lists, and multiline values.
@@ -328,7 +339,7 @@ JavaScript scripts and tests on protocol requests are rejected before connecting
 
 | Area | Current status |
 | --- | --- |
-| Desktop request forms, tabs, syntax highlighting | `.bru` source editor only |
+| Desktop request forms, tabs, syntax highlighting | HTTP forms and Source tabs. Syntax highlighting and protocol-specific forms remain unfinished. |
 | JavaScript scripts and tests | Embedded synchronous subset; Node APIs, async jobs, full Chai, and runner control remain unfinished |
 | OAuth | Client credentials and browser authorization code with PKCE S256 and loopback redirects. Token caching and refresh flows remain unfinished. |
 | OAuth 1, AWS SigV4, digest, NTLM, WSSE | Not implemented |

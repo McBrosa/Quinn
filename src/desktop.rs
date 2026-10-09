@@ -21,6 +21,8 @@ use quinn_api::{
     variables::Variables,
 };
 
+use crate::request_form::RequestForm;
+
 pub fn open(path: Option<PathBuf>) -> std::result::Result<(), String> {
     let engine = Engine::new(Duration::from_secs(30)).map_err(|error| error.to_string())?;
     let options = eframe::NativeOptions {
@@ -56,6 +58,8 @@ struct Quinn {
     selected: Option<PathBuf>,
     source: String,
     original: String,
+    form: Option<RequestForm>,
+    forms_tab: bool,
     response: Option<Response>,
     response_text: String,
     receiver: Option<Receiver<Result<Response>>>,
@@ -93,6 +97,8 @@ impl Quinn {
             selected: None,
             source: String::new(),
             original: String::new(),
+            form: None,
+            forms_tab: true,
             response: None,
             response_text: String::new(),
             receiver: None,
@@ -106,6 +112,28 @@ impl Quinn {
 
     fn dirty(&self) -> bool {
         self.source != self.original
+            || self
+                .form
+                .as_ref()
+                .is_some_and(|form| form.apply().map_or(true, |source| source != self.source))
+    }
+
+    fn apply_form(&mut self) -> bool {
+        let Some(form) = &mut self.form else {
+            return true;
+        };
+        match form.apply() {
+            Ok(source) => {
+                self.source = source;
+                self.form = None;
+                true
+            }
+            Err(error) => {
+                form.error = error.to_string();
+                self.error = error.to_string();
+                false
+            }
+        }
     }
 
     fn request_action(&mut self, action: Action, context: &egui::Context) {
@@ -146,6 +174,7 @@ impl Quinn {
                 self.selected = None;
                 self.source.clear();
                 self.original.clear();
+                self.form = None;
                 self.response = None;
                 self.response_text.clear();
                 self.error.clear();
@@ -162,6 +191,7 @@ impl Quinn {
             Ok(source) => {
                 self.original = source.clone();
                 self.source = source;
+                self.form = None;
                 self.selected = Some(path);
                 self.response = None;
                 self.response_text.clear();
@@ -172,6 +202,9 @@ impl Quinn {
     }
 
     fn save_request(&mut self) -> bool {
+        if !self.apply_form() {
+            return false;
+        }
         let Some(path) = &self.selected else {
             return false;
         };
@@ -190,6 +223,9 @@ impl Quinn {
 
     fn send(&mut self, context: &egui::Context) {
         if self.receiver.is_some() || self.selected.is_none() {
+            return;
+        }
+        if !self.apply_form() {
             return;
         }
         let prepared = (|| {
@@ -476,23 +512,47 @@ impl Quinn {
                 }
             });
         });
-        ui.label(
-            RichText::new("Edit the .bru source. Send uses the current editor contents.")
-                .small()
-                .weak(),
-        );
+        ui.horizontal(|ui| {
+            ui.selectable_value(&mut self.forms_tab, true, "Forms");
+            ui.selectable_value(&mut self.forms_tab, false, "Source");
+            ui.label(
+                RichText::new("Send and Save apply form changes.")
+                    .small()
+                    .weak(),
+            );
+        });
         ui.add_space(8.0);
         ScrollArea::vertical()
-            .id_salt("source")
+            .id_salt("request_editor")
             .max_height((ui.available_height() * 0.48).max(130.0))
             .show(ui, |ui| {
-                ui.add(
-                    TextEdit::multiline(&mut self.source)
+                if self.forms_tab {
+                    if self.form.is_none() {
+                        match RequestForm::parse(&self.source) {
+                            Ok(form) => self.form = Some(form),
+                            Err(error) => {
+                                ui.colored_label(ui.visuals().error_fg_color, error.to_string());
+                                ui.label("Open Source to edit this request. Its contents have not changed.");
+                            }
+                        }
+                    }
+                    if let Some(form) = &mut self.form && form.show(ui) {
+                        self.apply_form();
+                    }
+                } else {
+                    if self.form.as_ref().is_some_and(|form| form.apply().map_or(true, |source| source != self.source)) {
+                        ui.label("Apply or discard form changes before editing Source.");
+                        if ui.button("Apply form changes").clicked() { self.apply_form(); }
+                        if ui.button("Discard form changes").clicked() { self.form = None; }
+                    }
+                    let form_changed = self.form.as_ref().is_some_and(|form| form.apply().map_or(true, |source| source != self.source));
+                    if ui.add_enabled(!form_changed, TextEdit::multiline(&mut self.source)
                         .code_editor()
                         .font(FontId::monospace(13.0))
                         .desired_width(f32::INFINITY)
                         .desired_rows(14),
-                );
+                    ).changed() { self.form = None; }
+                }
             });
         egui::CollapsingHeader::new("Variable overrides (kept in memory)").show(ui, |ui| {
             ui.add(
@@ -599,6 +659,7 @@ impl Quinn {
             {
                 if discard {
                     self.source = self.original.clone();
+                    self.form = None;
                 }
                 self.apply_action(action, context);
             }

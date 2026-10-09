@@ -5,6 +5,8 @@ use quinn_api::{Error, Result, bru::Document, collection, engine::Engine, variab
 
 #[cfg(feature = "desktop")]
 mod desktop;
+#[cfg(feature = "desktop")]
+mod request_form;
 
 #[derive(Parser)]
 #[command(

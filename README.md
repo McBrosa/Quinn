@@ -5,7 +5,7 @@ It reads local Bruno `.bru` collections and sends REST, GraphQL, unary gRPC, and
 Collections stay on your filesystem and work with Git.
 
 This is an initial port of [Bruno](https://github.com/usebruno/bruno), not a complete replacement.
-The desktop interface uses a `.bru` source editor rather than Bruno's form editors.
+The desktop provides request forms and a lossless `.bru` source editor.
 See [COMPATIBILITY.md](COMPATIBILITY.md) for supported features and remaining work.
 
 ## Run the desktop app
@@ -19,7 +19,11 @@ cargo run --locked -- gui examples/starter
 
 Open a collection directory, select a request, and select an environment.
 For the example collection, select **Local**.
-Edit the request source, then click **Send**.
+Edit the request in **Forms** or **Source**.
+Then click **Send**.
+Forms provide method, URL, headers, query/path parameters, authentication, and body editors.
+Save and Send apply pending form changes. **Apply form changes** updates Source without saving.
+Apply or discard form drafts before editing Source.
 Send uses the current editor contents, including unsaved edits.
 Save writes the request to its original `.bru` file.
 
