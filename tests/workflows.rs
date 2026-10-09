@@ -129,6 +129,36 @@ fn oauth_configuration_inherits_and_resolves_variables() {
 }
 
 #[test]
+fn javascript_variables_feed_oauth_and_response_tests() {
+    let (url, handle) = server(vec![
+        r#"{"access_token":"script-oauth","token_type":"Bearer"}"#,
+        r#"{"id":42}"#,
+    ]);
+    let defaults = Document::parse(
+        "auth {\n  mode: oauth2\n}\nauth:oauth2 {\n  grant_type: client_credentials\n  access_token_url: {{url}}/token\n  client_id: {{client}}\n  client_secret: {{secret}}\n}\n",
+    )
+    .unwrap();
+    let request = Document::parse(
+        "get {\n  url: {{url}}/api\n  auth: inherit\n}\nscript:pre-request {\n  bru.setVar('client', 'script-client');\n  bru.setVar('secret', 'script-secret');\n}\nvars:post-response {\n  id: res.body.id\n}\ntests {\n  test('OAuth response', () => expect(res.status).to.equal(200));\n  test('extracted variable', () => expect(bru.getVar('id')).to.equal('42'));\n}\n",
+    )
+    .unwrap();
+    let response = engine()
+        .send(
+            &request,
+            &[defaults],
+            &Variables::from([("url".into(), url)]),
+        )
+        .unwrap();
+    assert!(response.passed());
+    assert_eq!(response.variables.get("id").map(String::as_str), Some("42"));
+    let requests = handle.join().unwrap();
+    let token_request = String::from_utf8_lossy(&requests[0]);
+    assert!(token_request.contains("client_id=script-client"));
+    assert!(token_request.contains("client_secret=script-secret"));
+    assert!(String::from_utf8_lossy(&requests[1]).contains("authorization: Bearer script-oauth"));
+}
+
+#[test]
 fn oauth_rejects_invalid_token_responses_without_sending_the_api_request() {
     for token in [
         r#"{"access_token":"","token_type":"Bearer"}"#,
