@@ -394,7 +394,7 @@ fn imported_postman_and_openapi_requests_execute_in_the_engine() {
                 "openapi":"3.0.3","info":{"title":"Send"},"servers":[{"url":url}],
                 "paths":{"/body":{"post":{"requestBody":{"content":{"application/json":{"example":{"name":"Quinn"}}}}}}}
             }).to_string(),
-            Format::Curl => unreachable!(),
+            Format::Curl | Format::Insomnia => unreachable!(),
         };
         let imported = parse(format, &input).unwrap();
         let document = Document::parse(&imported.requests[0].source).unwrap();

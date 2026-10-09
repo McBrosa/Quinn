@@ -17,6 +17,7 @@ pub enum Format {
     Postman,
     OpenApi,
     Curl,
+    Insomnia,
 }
 
 #[derive(Clone, Debug)]
@@ -48,6 +49,10 @@ pub fn parse(format: Format, input: &str) -> Result<ImportedCollection> {
             openapi(&document)?
         }
         Format::Curl => curl(input)?,
+        Format::Insomnia => insomnia(
+            &serde_json::from_str(input)
+                .map_err(|error| invalid(format!("cannot parse Insomnia JSON: {error}")))?,
+        )?,
     };
     if imported.requests.is_empty() {
         return Err(invalid("import contains no requests"));
@@ -246,6 +251,313 @@ fn postman(document: &Value) -> Result<ImportedCollection> {
         requests,
         variables,
     })
+}
+
+fn insomnia(document: &Value) -> Result<ImportedCollection> {
+    if document["_type"] != "export" || document["__export_format"] != 4 {
+        return Err(unsupported(
+            "Insomnia formats other than native JSON export v4",
+        ));
+    }
+    let resources = document["resources"]
+        .as_array()
+        .ok_or_else(|| invalid("Insomnia export needs a resources array"))?;
+    if resources.len() > MAX_REQUESTS * 4 {
+        return Err(invalid("Insomnia export exceeds 40000 resources"));
+    }
+    let mut ids = BTreeMap::new();
+    for resource in resources {
+        let id = required(resource, "_id")?;
+        if ids.insert(id, resource).is_some() {
+            return Err(invalid(format!("duplicate Insomnia resource '{id}'")));
+        }
+        match required(resource, "_type")? {
+            "workspace" | "request_group" | "request" | "environment" => {}
+            kind => return Err(unsupported(format!("Insomnia resource type '{kind}'"))),
+        }
+        for key in ["preRequestScript", "afterResponseScript", "scripts"] {
+            if resource.get(key).is_some_and(|value| {
+                !value.is_null()
+                    && value != ""
+                    && !value.as_array().is_some_and(Vec::is_empty)
+                    && !value.as_object().is_some_and(serde_json::Map::is_empty)
+            }) {
+                return Err(unsupported(format!("Insomnia executable '{key}'")));
+            }
+        }
+        if resource["settingEncodeUrl"] == false
+            || resource.get("settingFollowRedirects").is_some_and(|value| {
+                !value.is_null() && value != true && value != "global" && value != "on"
+            })
+            || resource["settingSendCookies"] == false
+            || resource["settingStoreCookies"] == false
+            || resource["settingDisableRenderRequestBody"] == true
+            || resource
+                .get("settingTimeout")
+                .is_some_and(|value| !value.is_null() && value != 0)
+        {
+            return Err(unsupported(
+                "Insomnia non-default URL, redirect, or cookie settings",
+            ));
+        }
+        if resource["_type"] != "request"
+            && resource.get("authentication").is_some_and(|value| {
+                !value.is_null() && !value.as_object().is_some_and(serde_json::Map::is_empty)
+            })
+        {
+            return Err(unsupported(
+                "Insomnia inherited workspace or folder authentication",
+            ));
+        }
+        if resource["_type"] != "request"
+            && ["headers", "parameters"].iter().any(|key| {
+                resource.get(*key).is_some_and(|value| {
+                    !value.is_null() && !value.as_array().is_some_and(Vec::is_empty)
+                })
+            })
+        {
+            return Err(unsupported(
+                "Insomnia inherited workspace or folder headers/parameters",
+            ));
+        }
+    }
+    let workspaces: Vec<_> = resources
+        .iter()
+        .filter(|value| value["_type"] == "workspace")
+        .collect();
+    if workspaces.len() != 1 {
+        return Err(invalid("Insomnia import needs exactly one workspace"));
+    }
+    let workspace = workspaces[0];
+    let workspace_id = required(workspace, "_id")?;
+    let name = required(workspace, "name")?.to_owned();
+    let mut variables = Variables::new();
+    let mut environment = false;
+    for resource in resources
+        .iter()
+        .filter(|value| value["_type"] != "workspace")
+    {
+        insomnia_ancestors(resource, &ids, workspace_id)?;
+        if resource["_type"] == "environment" {
+            if required(resource, "parentId")? != workspace_id || environment {
+                return Err(unsupported(
+                    "Insomnia child or multiple environments; export only the base environment",
+                ));
+            }
+            environment = true;
+            for (key, value) in resource["data"]
+                .as_object()
+                .ok_or_else(|| invalid("Insomnia environment data must be an object"))?
+            {
+                if key.contains(['.', '{', '}', ' ']) {
+                    return Err(unsupported(
+                        "Insomnia nested or non-identifier environment keys",
+                    ));
+                }
+                variables.insert(key.clone(), insomnia_value(value)?);
+            }
+        }
+        if resource["_type"] == "request_group"
+            && resource.get("environment").is_some_and(|value| {
+                !value.is_null() && !value.as_object().is_some_and(serde_json::Map::is_empty)
+            })
+        {
+            return Err(unsupported("Insomnia folder environment overrides"));
+        }
+    }
+    let mut requests = Vec::new();
+    for wire in resources.iter().filter(|value| value["_type"] == "request") {
+        if requests.len() >= MAX_REQUESTS {
+            return Err(invalid("Insomnia export exceeds 10000 requests"));
+        }
+        let mut names = insomnia_ancestors(wire, &ids, workspace_id)?;
+        names.reverse();
+        names.push(required(wire, "name")?.to_owned());
+        let mut request = Request {
+            name: names.join(" / "),
+            method: required(wire, "method")?.into(),
+            url: insomnia_value(&wire["url"])?,
+            ..Request::default()
+        };
+        request.headers = insomnia_pairs(wire.get("headers"))?;
+        request.query = insomnia_pairs(wire.get("parameters"))?;
+        request.path = insomnia_pairs(wire.get("pathParameters"))?;
+        let auth = &wire["authentication"];
+        if auth["disabled"] != true {
+            if let Some(fields) = auth.as_object() {
+                let allowed: &[&str] = match auth["type"].as_str().unwrap_or("") {
+                    "" | "none" => &["type", "disabled"],
+                    "basic" => &["type", "disabled", "username", "password"],
+                    "bearer" => &["type", "disabled", "token", "prefix"],
+                    _ => &[],
+                };
+                if fields.keys().any(|key| !allowed.contains(&key.as_str())) {
+                    return Err(unsupported("Insomnia unknown authentication fields"));
+                }
+            } else if !auth.is_null() {
+                return Err(invalid("Insomnia authentication must be an object"));
+            }
+            match auth["type"].as_str().unwrap_or("") {
+                "" | "none" => {}
+                "basic" => {
+                    request.auth = "basic".into();
+                    for key in ["username", "password"] {
+                        request
+                            .auth_pairs
+                            .push((key.into(), insomnia_value(&auth[key])?, true));
+                    }
+                }
+                "bearer" => {
+                    if auth["prefix"]
+                        .as_str()
+                        .is_some_and(|prefix| !prefix.is_empty() && prefix != "Bearer")
+                    {
+                        return Err(unsupported("Insomnia custom bearer prefix"));
+                    }
+                    request.auth = "bearer".into();
+                    request.auth_pairs.push((
+                        "token".into(),
+                        insomnia_value(&auth["token"])?,
+                        true,
+                    ));
+                }
+                kind => return Err(unsupported(format!("Insomnia authentication '{kind}'"))),
+            }
+        }
+        let body = &wire["body"];
+        let mime = body["mimeType"].as_str().unwrap_or("");
+        match mime.split(';').next().unwrap_or("") {
+            "" if body["text"].as_str().is_none_or(str::is_empty) => {
+                if body
+                    .get("params")
+                    .is_some_and(|params| !params.as_array().is_some_and(Vec::is_empty))
+                {
+                    return Err(unsupported("Insomnia body parameters without a MIME type"));
+                }
+            }
+            "" | "text/plain" | "application/json" | "text/xml" | "application/xml" => {
+                request.body = insomnia_value(&body["text"])?;
+                request.body_kind = match mime.split(';').next().unwrap_or("") {
+                    "application/json" => "json",
+                    "text/xml" | "application/xml" => "xml",
+                    _ => "text",
+                }
+                .into();
+                if !mime.is_empty()
+                    && !request.headers.iter().any(|(key, _, enabled)| {
+                        *enabled && key.eq_ignore_ascii_case("content-type")
+                    })
+                {
+                    request
+                        .headers
+                        .push(("Content-Type".into(), mime.into(), true));
+                }
+            }
+            "application/x-www-form-urlencoded" | "multipart/form-data" => {
+                request.body_kind = if mime.split(';').next() == Some("multipart/form-data") {
+                    "multipart-form"
+                } else {
+                    "form-urlencoded"
+                }
+                .into();
+                if body["params"].as_array().is_some_and(|params| {
+                    params.iter().any(|param| {
+                        param["type"].as_str().is_some_and(|kind| kind != "text")
+                            || param.get("fileName").is_some()
+                            || param.get("contentType").is_some()
+                    })
+                }) {
+                    return Err(unsupported("Insomnia file uploads or per-part MIME types"));
+                }
+                request.body_pairs = insomnia_pairs(body.get("params"))?;
+                if request.body_pairs.iter().any(|(_, value, _)| {
+                    value.contains("@file(") || value.contains("@contentType(")
+                }) {
+                    return Err(unsupported(
+                        "Insomnia text containing Bruno upload annotations",
+                    ));
+                }
+            }
+            mime => return Err(unsupported(format!("Insomnia body MIME type '{mime}'"))),
+        }
+        requests.push(request.render(requests.len() + 1)?);
+    }
+    Ok(ImportedCollection {
+        name,
+        requests,
+        variables,
+    })
+}
+
+fn insomnia_ancestors(
+    resource: &Value,
+    ids: &BTreeMap<&str, &Value>,
+    workspace: &str,
+) -> Result<Vec<String>> {
+    let mut parent = required(resource, "parentId")?;
+    let mut names = Vec::new();
+    let mut visited = std::collections::BTreeSet::new();
+    while parent != workspace {
+        if names.len() >= 32 || !visited.insert(parent) {
+            return Err(invalid("Insomnia parent cycle or nesting exceeds 32"));
+        }
+        let resource = ids
+            .get(parent)
+            .ok_or_else(|| invalid(format!("missing Insomnia parent '{parent}'")))?;
+        if resource["_type"] != "request_group" {
+            return Err(unsupported(
+                "Insomnia parent must be a folder in the selected workspace",
+            ));
+        }
+        names.push(required(resource, "name")?.into());
+        parent = required(resource, "parentId")?;
+    }
+    Ok(names)
+}
+
+fn insomnia_pairs(values: Option<&Value>) -> Result<Vec<(String, String, bool)>> {
+    let Some(values) = values else {
+        return Ok(Vec::new());
+    };
+    values
+        .as_array()
+        .ok_or_else(|| invalid("Insomnia name/value entries must be an array"))?
+        .iter()
+        .map(|value| {
+            Ok((
+                required(value, "name")?.into(),
+                insomnia_value(&value["value"])?,
+                value["disabled"] != true,
+            ))
+        })
+        .collect()
+}
+
+fn insomnia_value(value: &Value) -> Result<String> {
+    let input = scalar(value)?;
+    if input.contains("{%") {
+        return Err(unsupported("Insomnia template tags"));
+    }
+    let mut output = String::new();
+    let mut rest = input.as_str();
+    while let Some((prefix, placeholder)) = rest.split_once("{{") {
+        output.push_str(prefix);
+        let (name, suffix) = placeholder
+            .split_once("}}")
+            .ok_or_else(|| invalid("unclosed Insomnia variable"))?;
+        let name = name.trim().strip_prefix("_.").unwrap_or(name.trim());
+        if name.is_empty()
+            || !name
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+        {
+            return Err(unsupported("Insomnia dynamic or nested template variables"));
+        }
+        output.push_str(&format!("{{{{{name}}}}}"));
+        rest = suffix;
+    }
+    output.push_str(rest);
+    Ok(output)
 }
 
 fn postman_items(

@@ -457,7 +457,7 @@ JavaScript scripts and tests on protocol requests are rejected before connecting
 
 ## Offline imports
 
-Use `quinn import FORMAT SOURCE DESTINATION` with `postman`, `openapi`, or `curl`.
+Use `quinn import FORMAT SOURCE DESTINATION` with `postman`, `openapi`, `insomnia`, or `curl`.
 The source is a local UTF-8 file. The input limit is 16 MiB.
 An import contains at most 10,000 requests. Postman folder nesting has a 32-level limit.
 The library exposes `importers::parse` and `ImportedCollection::write_to`.
@@ -500,7 +500,43 @@ Output-only silent/error flags, `--compressed`, and `-L/--location` are accepted
 Other options, multiple URLs, interactive credentials, and `@file` input are rejected.
 Shell substitutions and environment variables are not expanded.
 Imported requests use Quinn's networking defaults, including cookies, redirects, and timeouts, rather than cURL's runtime defaults.
-Insomnia, export formats, and desktop import controls remain unfinished.
+Insomnia native JSON export v4 supports exactly one workspace and one optional base environment.
+Folder ancestry becomes request-name prefixes. Scalar environment variables become collection defaults.
+HTTP methods, headers, query/path parameters, disabled entries, basic/bearer auth, and JSON/text/XML bodies are supported.
+Form-urlencoded and text-only multipart bodies are supported.
+Simple `{{ _.name }}` variables become `{{name}}`. Nested variables and template tags are rejected.
+Parent cycles, missing parents, duplicate IDs, and folder nesting beyond 32 levels are rejected.
+Scripts, tests, other resource types, multiple/child environments, folder variables/auth, uploads, and non-default networking settings are rejected.
+Insomnia v5 YAML, GraphQL MIME bodies, cookie jars, and request descriptions are not converted.
+Request sequence follows the exported resource order.
+Desktop import controls remain unfinished.
+
+## Offline exports
+
+Use `quinn export FORMAT PATH DESTINATION [--env NAME]` with `postman` or `openapi`.
+The library exposes `exporters::export` and `exporters::write_new`.
+The input can be a collection, folder, or single HTTP request.
+Exports contain between 1 and 10,000 requests. All requests are validated before the output file is created.
+Existing files and symlinks are never overwritten.
+Collection/folder headers, static variables, and inherited authentication become request-level values.
+Environment values override static variables. Export files can contain plaintext secrets.
+Scripts/tests, assertions, response variables, settings, protocol requests, and unknown nonempty blocks are rejected.
+Embedded URL query strings must first move into `params:query`.
+List-valued dictionaries, binary bodies, uploads, and multipart MIME annotations are rejected.
+Documentation and response examples are not exported.
+
+Postman collection v2.1 exports preserve variable placeholders, disabled entries, and basic/bearer/header-or-query API-key authentication.
+Bodies support raw JSON/text/XML, GraphQL, form-urlencoded, and text-only multipart.
+Folder hierarchy becomes flat request names. OAuth and SPARQL bodies are rejected.
+
+OpenAPI 3.0.3 exports materialize all variables and produce primitive parameter examples.
+Operations contain absolute per-operation server URLs and a generic response description.
+Raw JSON, XML, and text bodies become explicit examples. JSON body formatting can change on reimport.
+Authentication credentials are rejected; use Postman export for authenticated requests.
+Explicit Accept/Authorization headers and bodyless Content-Type headers are rejected because OpenAPI ignores these parameter definitions.
+Form, multipart, GraphQL, duplicate parameters, and duplicate path/method operations are rejected.
+Path parameters must fill a whole URL segment. Disabled entries are omitted from OpenAPI examples.
+Response schemas and API contracts are not inferred from request samples.
 
 ## Remaining port work
 
@@ -521,8 +557,8 @@ Custom configuration for gRPC and WebSockets, per-host certificates, and desktop
 | OAuth 1, AWS SigV4, NTLM, WSSE | Not implemented |
 | Multipart requests and binary uploads | Streamed file uploads. Custom boundaries remain unfinished. |
 | gRPC and WebSockets | Unary and finite streaming RPCs with local protobuf files or server reflection, plus one-shot WebSocket exchange. Interactive sessions remain unfinished. |
-| OpenAPI, Postman, Insomnia, and cURL import/export | Offline Postman v2.1, OpenAPI 3 JSON/YAML, and cURL imports. Insomnia and exports remain unfinished. |
-| Bruno YAML collections | Not implemented |
+| OpenAPI, Postman, Insomnia, and cURL import/export | Offline Postman v2.1, OpenAPI 3 JSON/YAML, Insomnia v4 JSON, and cURL imports. Supported HTTP subsets export to Postman v2.1 and OpenAPI 3 JSON. |
+| Bruno YAML collections | OpenCollection 1.0.0 HTTP subset; protocol-specific YAML, secret storage, and typed variables remain unfinished. |
 | Proxy configuration, client certificates, custom CAs | HTTP/OAuth session configuration through CLI or library. Protocol configuration and desktop controls remain unfinished. |
 | Bruno secret storage and integrations | Not implemented |
 | Response-variable extraction and runner scripting | JSON selectors, JavaScript runtime variables, and sequential chaining; runner control remains unfinished |

@@ -82,7 +82,8 @@ The default timeout is 30 seconds. Use `--timeout SECONDS` to change it.
 - Embedded JavaScript scripts and synchronous tests with bounded execution.
 - Response bodies, headers, timing, byte counts, and JSON reports.
 - Unary gRPC with local protobuf files and text WebSocket send/receive.
-- Offline Postman v2.1, OpenAPI 3 JSON/YAML, and cURL imports.
+- Offline Postman v2.1, OpenAPI 3 JSON/YAML, Insomnia v4 JSON, and cURL imports.
+- Offline Postman v2.1 and OpenAPI 3 JSON exports for supported HTTP requests.
 
 Quinn rejects unsupported executable blocks before it sends a request.
 It does not silently skip scripts or JavaScript tests.
@@ -97,6 +98,7 @@ Save the export or one cURL command in a local file. Then import it into a new d
 quinn import postman collection.postman_collection.json ./imported-postman
 quinn import openapi openapi.yaml ./imported-openapi
 quinn import curl request.txt ./imported-curl
+quinn import insomnia insomnia.json ./imported-insomnia
 quinn list ./imported-postman
 ~~~
 
@@ -110,6 +112,21 @@ Required parameters without examples use variables that you must supply before a
 Optional parameters without examples remain disabled.
 Unsupported scripts, authentication, file uploads, or parameter serialization stop the import.
 See [COMPATIBILITY.md](COMPATIBILITY.md) for the complete import limits.
+
+## Export a collection
+
+Export supported HTTP requests into a new JSON file:
+
+~~~sh
+quinn export postman ./collection ./collection.postman_collection.json
+quinn export openapi ./collection ./openapi.json --env Local
+~~~
+
+Exports do not execute scripts or send requests. Existing output paths are never replaced.
+Postman exports flatten folder defaults into each request and preserve variable placeholders.
+OpenAPI exports resolve variables into examples and support unauthenticated requests with raw JSON, XML, or text bodies.
+Scripts, tests, assertions, response variables, and unrepresentable behavior stop the export before file creation.
+Export files can contain plaintext credentials and environment values. Review them before you share or commit them.
 
 ## Configure HTTP networking
 

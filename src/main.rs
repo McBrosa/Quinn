@@ -21,6 +21,18 @@ struct Args {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Export supported HTTP requests to a new offline JSON file.
+    Export {
+        #[arg(value_enum)]
+        format: ExportFormat,
+        /// Collection, folder, or request to export.
+        path: PathBuf,
+        /// New JSON file. Existing paths are never overwritten.
+        destination: PathBuf,
+        /// Materialize this environment. Export files can contain secrets.
+        #[arg(short, long)]
+        env: Option<String>,
+    },
     /// Import an offline export into a new Bruno collection directory.
     Import {
         #[arg(value_enum)]
@@ -124,6 +136,13 @@ enum ImportFormat {
     Postman,
     Openapi,
     Curl,
+    Insomnia,
+}
+
+#[derive(Clone, ValueEnum)]
+enum ExportFormat {
+    Postman,
+    Openapi,
 }
 
 fn main() -> ExitCode {
@@ -142,6 +161,21 @@ fn run(args: Args) -> Result<bool> {
         path: None,
         network: NetworkArgs::default(),
     }) {
+        Command::Export {
+            format,
+            path,
+            destination,
+            env,
+        } => {
+            let format = match format {
+                ExportFormat::Postman => quinn_api::exporters::Format::Postman,
+                ExportFormat::Openapi => quinn_api::exporters::Format::OpenApi,
+            };
+            let source = quinn_api::exporters::export(format, &path, env.as_deref())?;
+            quinn_api::exporters::write_new(&destination, &source)?;
+            println!("Exported requests into {}", destination.display());
+            Ok(true)
+        }
         Command::Import {
             format,
             source,
@@ -151,6 +185,7 @@ fn run(args: Args) -> Result<bool> {
                 ImportFormat::Postman => quinn_api::importers::Format::Postman,
                 ImportFormat::Openapi => quinn_api::importers::Format::OpenApi,
                 ImportFormat::Curl => quinn_api::importers::Format::Curl,
+                ImportFormat::Insomnia => quinn_api::importers::Format::Insomnia,
             };
             let imported = quinn_api::importers::parse(format, &collection::read(&source)?)?;
             imported.write_to(&destination)?;
