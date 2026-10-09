@@ -11,7 +11,7 @@ const METHODS: &[&str] = &[
     "get", "post", "put", "patch", "delete", "head", "options", "connect", "trace", "http",
 ];
 const AUTH: &[&str] = &[
-    "none", "inherit", "basic", "digest", "bearer", "apikey", "oauth2",
+    "none", "inherit", "basic", "digest", "bearer", "apikey", "awsv4", "oauth1", "oauth2",
 ];
 const BODIES: &[(&str, &str)] = &[
     ("none", ""),
@@ -35,6 +35,7 @@ pub struct RequestForm {
     pairs: BTreeMap<String, Vec<Pair>>,
     contents: BTreeMap<String, String>,
     tab: String,
+    show_credentials: bool,
     pub error: String,
 }
 
@@ -59,6 +60,7 @@ impl RequestForm {
         let auth = document
             .value(&method, "auth")?
             .unwrap_or_else(|| "none".into());
+        validate_auth_form(&document, &auth)?;
         let body = document
             .value(&method, "body")?
             .unwrap_or_else(|| "none".into());
@@ -71,6 +73,8 @@ impl RequestForm {
             "auth:digest",
             "auth:bearer",
             "auth:apikey",
+            "auth:awsv4",
+            "auth:oauth1",
             "auth:oauth2",
             "body:form-urlencoded",
             "body:multipart-form",
@@ -108,6 +112,7 @@ impl RequestForm {
             pairs,
             contents,
             tab: "Headers".into(),
+            show_credentials: false,
             error: String::new(),
         })
     }
@@ -177,6 +182,7 @@ impl RequestForm {
                 result = editor::replace_block(&result, name, Some(""))?;
             }
         }
+        validate_auth_form(&Document::parse(&result)?, &self.auth)?;
         Ok(result)
     }
 
@@ -221,44 +227,35 @@ impl RequestForm {
                     combo(ui, "auth_mode", &mut self.auth, AUTH);
                 });
                 if self.auth != previous_auth {
-                    let name = format!("auth:{}", self.auth);
-                    let fields: &[(&str, &str)] = match self.auth.as_str() {
-                        "basic" | "digest" => &[("username", ""), ("password", "")],
-                        "bearer" => &[("token", "")],
-                        "apikey" => &[("key", ""), ("value", ""), ("placement", "header")],
-                        "oauth2" => &[
-                            ("grant_type", "client_credentials"),
-                            ("access_token_url", ""),
-                            ("client_id", ""),
-                            ("client_secret", ""),
-                        ],
-                        _ => &[],
-                    };
-                    let pairs = self.pairs.entry(name).or_default();
-                    if pairs.is_empty() {
-                        pairs.extend(fields.iter().map(|(key, value)| Pair {
-                            key: (*key).into(),
-                            value: (*value).into(),
-                            enabled: true,
-                            is_list: false,
-                        }));
-                    }
+                    self.initialize_auth_fields();
                 }
                 if matches!(
                     self.auth.as_str(),
-                    "basic" | "digest" | "bearer" | "apikey" | "oauth2"
+                    "basic" | "digest" | "bearer" | "apikey" | "awsv4" | "oauth1" | "oauth2"
                 ) {
                     let name = format!("auth:{}", self.auth);
                     ui.label(match self.auth.as_str() {
                         "basic" | "digest" => "Fields: username, password. Use {{variables}} for secrets.",
                         "bearer" => "Field: token. Use {{variables}} for secrets.",
                         "apikey" => "Fields: key, value, placement (header or queryparams).",
+                        "awsv4" => "AWS Signature V4: explicit access key, secret key, region, service, and optional session token. Profiles are not supported.",
+                        "oauth1" => "OAuth 1.0: HMAC-SHA1 or HMAC-SHA256, header placement. Quinn generates the nonce and timestamp.",
                         _ => "Use Bruno OAuth field names. Configure supported grants in COMPATIBILITY.md.",
                     });
+                    ui.checkbox(&mut self.show_credentials, "Show credential values")
+                        .on_hover_text(
+                            "Reveal credentials on screen. Save still writes plaintext.",
+                        );
+                    ui.label(
+                        "Save stores credentials as plaintext. Use {{variables}} for secrets.",
+                    );
                     self.pairs_ui(ui, &name);
                 } else if self.auth == "inherit" {
                     ui.label("Uses the nearest collection or folder authentication.");
+                } else if self.auth == "none" {
+                    ui.label("No authentication handler. Configured headers are still sent.");
                 }
+                ui.label("Changing the mode keeps existing auth blocks in Source.");
             }
             "Body" => {
                 ui.horizontal(|ui| {
@@ -338,9 +335,11 @@ impl RequestForm {
                     }
                 });
                 let rows = if pair.value.contains('\n') { 3 } else { 1 };
+                let masked = secret_field(name, &pair.key) && !self.show_credentials;
                 ui.add(
                     TextEdit::multiline(&mut pair.value)
                         .hint_text("Value")
+                        .password(masked)
                         .desired_rows(rows)
                         .desired_width(f32::INFINITY),
                 );
@@ -358,6 +357,139 @@ impl RequestForm {
             });
         }
     }
+
+    fn initialize_auth_fields(&mut self) {
+        self.show_credentials = false;
+        let fields: &[(&str, &str)] = match self.auth.as_str() {
+            "basic" | "digest" => &[("username", ""), ("password", "")],
+            "bearer" => &[("token", "")],
+            "apikey" => &[("key", ""), ("value", ""), ("placement", "header")],
+            "awsv4" => &[
+                ("accessKeyId", ""),
+                ("secretAccessKey", ""),
+                ("region", ""),
+                ("service", ""),
+                ("sessionToken", ""),
+            ],
+            "oauth1" => &[
+                ("consumer_key", ""),
+                ("consumer_secret", ""),
+                ("access_token", ""),
+                ("token_secret", ""),
+                ("signature_method", "HMAC-SHA1"),
+                ("realm", ""),
+                ("placement", "header"),
+            ],
+            "oauth2" => &[
+                ("grant_type", "client_credentials"),
+                ("access_token_url", ""),
+                ("client_id", ""),
+                ("client_secret", ""),
+            ],
+            _ => &[],
+        };
+        let name = format!("auth:{}", self.auth);
+        let pairs = self.pairs.entry(name).or_default();
+        if pairs.is_empty() {
+            pairs.extend(fields.iter().map(|(key, value)| Pair {
+                key: (*key).into(),
+                value: (*value).into(),
+                enabled: true,
+                is_list: false,
+            }));
+        }
+    }
+}
+
+fn secret_field(block: &str, key: &str) -> bool {
+    block.starts_with("auth:")
+        && !matches!(
+            key,
+            "username"
+                | "accessKeyId"
+                | "region"
+                | "service"
+                | "key"
+                | "placement"
+                | "consumer_key"
+                | "signature_method"
+                | "realm"
+                | "version"
+                | "grant_type"
+                | "access_token_url"
+                | "authorization_url"
+                | "callback_url"
+                | "client_id"
+                | "scope"
+                | "credentials_placement"
+                | "auto_refresh_token"
+                | "refresh_token_url"
+                | "pkce"
+                | "state"
+                | "include_body_hash"
+        )
+}
+
+fn validate_auth_form(document: &Document, auth: &str) -> Result<()> {
+    if !AUTH.contains(&auth) {
+        return Err(invalid(
+            "Forms do not support this authentication. Use Source.",
+        ));
+    }
+    let keys: &[&str] = match auth {
+        "digest" => &["username", "password"],
+        "awsv4" => &[
+            "accessKeyId",
+            "secretAccessKey",
+            "region",
+            "service",
+            "sessionToken",
+            "profileName",
+        ],
+        "oauth1" => &[
+            "consumer_key",
+            "consumer_secret",
+            "access_token",
+            "token_secret",
+            "signature_method",
+            "realm",
+            "placement",
+            "version",
+            "nonce",
+            "timestamp",
+            "callback_url",
+            "verifier",
+            "private_key",
+            "include_body_hash",
+        ],
+        _ => return Ok(()),
+    };
+    for pair in document
+        .pairs(&format!("auth:{auth}"))?
+        .iter()
+        .filter(|pair| pair.enabled)
+    {
+        let value = pair.value.as_str();
+        let unsupported_value = match (auth, pair.key.as_str()) {
+            ("awsv4", "profileName")
+            | ("oauth1", "nonce" | "timestamp" | "callback_url" | "verifier" | "private_key") => {
+                !value.is_empty()
+            }
+            ("oauth1", "placement") => !["", "header"].contains(&value),
+            ("oauth1", "version") => !["", "1.0"].contains(&value),
+            ("oauth1", "signature_method") => {
+                !["", "HMAC-SHA1", "HMAC-SHA256"].contains(&value) && !value.contains("{{")
+            }
+            ("oauth1", "include_body_hash") => !["", "false"].contains(&value),
+            _ => false,
+        };
+        if pair.is_list || !keys.contains(&pair.key.as_str()) || unsupported_value {
+            return Err(invalid(
+                "Forms cannot edit this authentication configuration. Use Source.",
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn combo(ui: &mut egui::Ui, id: &str, value: &mut String, options: &[&str]) {
@@ -400,6 +532,165 @@ mod tests {
         );
         assert!(updated.ends_with("script:pre-request {\n  bru.setVar('x', 'y');\n}\n"));
         Ok(())
+    }
+
+    #[test]
+    fn aws_and_oauth1_credentials_roundtrip_losslessly_with_disabled_fields() -> Result<()> {
+        for (mode, fields, edited_key) in [
+            (
+                "awsv4",
+                "  accessKeyId: {{access}}\n  secretAccessKey: {{secret}}\n  region: us-east-1\n  service: execute-api\n  ~sessionToken: old-secret\n  ~future: keep-disabled\n",
+                "region",
+            ),
+            (
+                "oauth1",
+                "  consumer_key: {{consumer}}\n  consumer_secret: {{consumer_secret}}\n  access_token: {{token}}\n  token_secret: {{token_secret}}\n  signature_method: HMAC-SHA256\n  ~realm: keep-disabled\n  ~future: keep-disabled\n",
+                "consumer_key",
+            ),
+        ] {
+            let source = format!(
+                "get {{\n  url: https://example.test\n  auth: {mode}\n  future: untouched\n}}\n\nauth:{mode} {{\n{fields}}}\n\nscript:pre-request {{\n  bru.setVar('untouched', 'yes');\n}}\n"
+            );
+            let mut form = RequestForm::parse(&source)?;
+            assert!(!form.show_credentials);
+            assert_eq!(form.apply()?, source);
+            let name = format!("auth:{mode}");
+            let pairs = form
+                .pairs
+                .get_mut(&name)
+                .ok_or_else(|| super::invalid("missing auth fields"))?;
+            let edited = pairs
+                .iter_mut()
+                .find(|pair| pair.key == edited_key)
+                .ok_or_else(|| super::invalid("missing editable field"))?;
+            edited.value = "changed".into();
+            let updated = form.apply()?;
+            let document = Document::parse(&updated)?;
+            assert_eq!(
+                document.value(&name, edited_key)?.as_deref(),
+                Some("changed")
+            );
+            assert!(updated.contains("  ~future: keep-disabled\n"));
+            assert!(updated.contains("  future: untouched\n"));
+            assert!(
+                updated.ends_with("script:pre-request {\n  bru.setVar('untouched', 'yes');\n}\n")
+            );
+            assert_eq!(RequestForm::parse(&updated)?.apply()?, updated);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn auth_mode_switches_keep_credentials_and_restore_existing_disabled_fields() -> Result<()> {
+        let source = "get {\n  url: https://example.test\n  auth: awsv4\n}\nauth:awsv4 {\n  accessKeyId: {{access}}\n  secretAccessKey: {{secret}}\n  region: us-east-1\n  service: s3\n  ~sessionToken: {{oldToken}}\n}\n";
+        let mut form = RequestForm::parse(source)?;
+        let old_pairs = form
+            .pairs
+            .get("auth:awsv4")
+            .cloned()
+            .ok_or_else(|| super::invalid("missing AWS fields"))?;
+        for mode in ["none", "inherit", "oauth1", "digest", "awsv4"] {
+            form.auth = mode.into();
+            form.show_credentials = true;
+            form.initialize_auth_fields();
+            assert!(!form.show_credentials);
+            let updated = form.apply()?;
+            let document = Document::parse(&updated)?;
+            assert_eq!(document.value("get", "auth")?.as_deref(), Some(mode));
+            assert_eq!(document.pairs("auth:awsv4")?, old_pairs);
+            assert!(updated.contains("  ~sessionToken: {{oldToken}}\n"));
+        }
+        assert_eq!(form.apply()?.matches("auth:awsv4 {").count(), 1);
+        assert_eq!(form.pairs.get("auth:oauth1").map(Vec::len), Some(7));
+        assert_eq!(form.pairs.get("auth:digest").map(Vec::len), Some(2));
+        Ok(())
+    }
+
+    #[test]
+    fn unsupported_auth_source_falls_back_and_unsupported_edits_do_not_replace_it() -> Result<()> {
+        for (mode, fields) in [
+            ("awsv4", "  profileName: production\n"),
+            ("awsv4", "  signatureVersion: v4a\n"),
+            ("digest", "  realm: preset\n"),
+            ("oauth1", "  signature_method: RSA-SHA1\n"),
+            ("oauth1", "  nonce: fixed\n"),
+            ("oauth1", "  placement: query\n"),
+            ("oauth1", "  include_body_hash: true\n"),
+            ("oauth1", "  callback_url: https://example.test/callback\n"),
+        ] {
+            let source = format!(
+                "get {{\n  url: https://example.test\n  auth: {mode}\n}}\nauth:{mode} {{\n{fields}}}\n"
+            );
+            let result = RequestForm::parse(&source);
+            assert!(result.is_err());
+            let error = result
+                .err()
+                .ok_or_else(|| super::invalid("missing expected error"))?
+                .to_string();
+            assert!(error.contains("Use Source"));
+            assert!(
+                Document::parse(&source)?
+                    .block(&format!("auth:{mode}"))
+                    .is_some()
+            );
+        }
+        assert!(
+            RequestForm::parse(
+                "get {\n auth: future-auth\n}\nauth:future-auth {\n secret: keep\n}\n"
+            )
+            .is_err()
+        );
+        let source = "get {\n  url: https://example.test\n  auth: awsv4\n}\nauth:awsv4 {\n  profileName: \n}\n";
+        let mut form = RequestForm::parse(source)?;
+        let pair = form
+            .pairs
+            .get_mut("auth:awsv4")
+            .and_then(|pairs| pairs.first_mut())
+            .ok_or_else(|| super::invalid("missing profile field"))?;
+        pair.value = "not-supported".into();
+        assert!(form.apply().is_err());
+        assert_eq!(form.source, source);
+        Ok(())
+    }
+
+    #[test]
+    fn inactive_unsupported_auth_blocks_remain_byte_identical() -> Result<()> {
+        let source = "get {\n  url: https://example.test\n  auth: none\n}\nauth:awsv4 {\n  profileName: production\n  future: keep\n}\nauth:oauth1 {\n  nonce: manually-configured\n  private_key: hidden-private-key\n}\n";
+        let mut form = RequestForm::parse(source)?;
+        form.url = "https://example.test/new".into();
+        let updated = form.apply()?;
+        assert!(updated.ends_with("auth:awsv4 {\n  profileName: production\n  future: keep\n}\nauth:oauth1 {\n  nonce: manually-configured\n  private_key: hidden-private-key\n}\n"));
+        Ok(())
+    }
+
+    #[test]
+    fn credential_masking_covers_secrets_but_not_scope_fields() {
+        for (block, key) in [
+            ("auth:basic", "password"),
+            ("auth:digest", "password"),
+            ("auth:awsv4", "secretAccessKey"),
+            ("auth:awsv4", "sessionToken"),
+            ("auth:oauth1", "consumer_secret"),
+            ("auth:oauth1", "access_token"),
+            ("auth:oauth1", "token_secret"),
+            ("auth:oauth1", "private_key"),
+            ("auth:oauth2", "client_secret"),
+            ("auth:bearer", "token"),
+            ("auth:apikey", "value"),
+            ("auth:basic", "future-secret"),
+        ] {
+            assert!(super::secret_field(block, key), "{block}/{key}");
+        }
+        for (block, key) in [
+            ("auth:basic", "username"),
+            ("auth:awsv4", "region"),
+            ("auth:awsv4", "service"),
+            ("auth:oauth1", "signature_method"),
+            ("auth:oauth1", "placement"),
+            ("headers", "token"),
+        ] {
+            assert!(!super::secret_field(block, key), "{block}/{key}");
+        }
     }
 
     #[test]
