@@ -1,7 +1,7 @@
 # Quinn
 
 Quinn is a native Rust API client with a desktop app and CLI.
-It reads local Bruno `.bru` collections and sends REST and GraphQL requests.
+It reads local Bruno `.bru` collections and sends REST, GraphQL, unary gRPC, and one-shot WebSocket requests.
 Collections stay on your filesystem and work with Git.
 
 This is an initial port of [Bruno](https://github.com/usebruno/bruno), not a complete replacement.
@@ -73,6 +73,7 @@ The default timeout is 30 seconds. Use `--timeout SECONDS` to change it.
 - Response variables that pass tokens and IDs between requests.
 - Embedded JavaScript scripts and synchronous tests with bounded execution.
 - Response bodies, headers, timing, byte counts, and JSON reports.
+- Unary gRPC with local protobuf files and text WebSocket send/receive.
 
 Quinn rejects unsupported executable blocks before it sends a request.
 It does not silently skip scripts or JavaScript tests.
@@ -118,6 +119,19 @@ Promise-based operations and asynchronous tests are unsupported.
 Run only trusted local scripts: built-in operations and heap allocations do not have hard wall-clock or memory limits.
 See [COMPATIBILITY.md](COMPATIBILITY.md) for the supported subset.
 
+## gRPC and WebSockets
+
+Use Bruno's `grpc` and `body:grpc` blocks for a unary request.
+Configure `protobuf.protoFiles` and `protobuf.importPaths` in the collection's `bruno.json`.
+Quinn compiles `.proto` files in Rust at runtime. You do not need `protoc` or generated Rust code.
+Alternatively, set `descriptor: path/to/descriptors.bin` in the `grpc` block to use a descriptor set.
+
+Use `ws` and `body:ws` blocks for a WebSocket request.
+Quinn connects, sends one text message, reads one response message, and closes the connection.
+It can also receive without sending when `body: none` is selected.
+These requests run with the same **Send** button and `quinn run` command as HTTP requests.
+See [COMPATIBILITY.md](COMPATIBILITY.md#grpc-and-websockets) for examples and protocol limits.
+
 ## Development
 
 ```sh
@@ -128,7 +142,7 @@ cargo test --locked --no-default-features
 cargo build --locked --release
 ```
 
-Tests use a local HTTP server and do not require internet access.
+Tests use local HTTP, HTTP/2 gRPC, and WebSocket servers and do not require internet access.
 GitHub Actions runs checks on macOS, Linux, and Windows and uploads native executables.
 
 The library contains separate modules for parsing, collection files, variables, and HTTP requests.

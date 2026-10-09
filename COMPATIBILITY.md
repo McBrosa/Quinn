@@ -1,6 +1,6 @@
 # Bruno compatibility
 
-Quinn 0.2 implements the core HTTP workflow in Rust.
+Quinn implements the core HTTP workflow, unary gRPC, and one-shot WebSocket requests in Rust.
 It does not implement every package or feature in Bruno.
 The reference commit is recorded in [NOTICE](NOTICE).
 
@@ -228,6 +228,102 @@ Each script is limited to 64 KiB and serialized output to 1 MiB.
 These limits do not form a security sandbox: built-in operations and heap allocation
 are not hard bounded. Run only trusted local collection scripts.
 
+## gRPC and WebSockets
+
+Both protocols use collection defaults, static variables, environment/runtime variables, assertions, and response-variable extraction.
+They support inherited basic or bearer authentication. Other authentication modes are rejected.
+Network operations have one total request timeout, including connection setup and message exchange.
+Incoming and outgoing protocol messages have a 16 MiB limit.
+TLS verification stays enabled for `wss://`, `https://`, and `grpcs://`.
+Custom CAs, client certificates, and insecure TLS overrides are not supported.
+
+### Unary gRPC
+
+```bru
+grpc {
+  url: grpc://127.0.0.1:50051
+  method: /hello.HelloService/SayHello
+  methodType: unary
+  body: grpc
+  auth: none
+}
+
+metadata {
+  x-request-id: {{requestId}}
+}
+
+body:grpc {
+  name: message 1
+  content: '''
+    { "greeting": "{{name}}" }
+  '''
+}
+```
+
+Configure individual `.proto` files in `bruno.json`:
+
+```json
+{
+  "version": "1",
+  "name": "My collection",
+  "type": "collection",
+  "protobuf": {
+    "protoFiles": [{ "path": "protos/hello.proto", "type": "file" }],
+    "importPaths": [{ "path": "protos", "enabled": true }]
+  }
+}
+```
+
+Paths resolve from the collection root. Disabled files and import paths are ignored.
+Quinn parses and compiles protobuf source files with [protox](https://docs.rs/protox/latest/protox/), without an external `protoc` process.
+Protobuf directory entries are not supported; list individual files.
+The Quinn-specific `descriptor` field in a `grpc` block can instead specify a binary `FileDescriptorSet` with all dependencies.
+Message JSON follows the [protobuf JSON mapping](https://protobuf.dev/programming-guides/json/), including base64 byte fields and string-encoded 64-bit integers.
+Unknown fields, missing methods, and streaming methods are rejected before connecting.
+
+`grpc://` and `http://` use plaintext HTTP/2. `grpcs://` and `https://` use verified TLS.
+The URL must be an origin with no path, query, credentials, or fragment.
+Request `metadata` and inherited `headers` become gRPC metadata.
+Keys ending in `-bin` send the UTF-8 bytes of their configured value, as Bruno does.
+Binary response metadata is shown as base64.
+Transport headers such as `grpc-*`, `content-type`, and `te` are managed by Quinn.
+
+A successful RPC has `res.status: 200` and response header `grpc-status: 0`.
+A nonzero gRPC status has `res.status: 500`, with the original code in `grpc-status` and message in `grpc-message`.
+It fails the CLI run and remains available for inspection and assertions.
+Responses contain protobuf JSON. Byte counts measure the protobuf payload, not the JSON preview.
+Server reflection, server/client streaming, bidirectional streams, compression, and an interactive message history are not implemented.
+
+### One-shot WebSockets
+
+```bru
+ws {
+  url: ws://127.0.0.1:8080/echo
+  body: ws
+  auth: none
+}
+
+body:ws {
+  name: message 1
+  type: json
+  content: '''
+    { "message": "{{message}}" }
+  '''
+}
+```
+
+Quinn sends a single text frame and returns the first text or binary application message.
+`type` can be `text` or `json`; JSON content is validated before connecting.
+With `body: none`, Quinn receives without sending.
+Query parameters and inherited headers are supported. Use `Sec-WebSocket-Protocol` for a subprotocol.
+Quinn manages handshake headers and does not follow redirects.
+Ping/pong frames are handled while waiting for the response.
+The response has status `101` and includes handshake response headers.
+The `x-quinn-message-type` response header is `text` or `binary-base64`.
+Binary responses use base64 rather than lossy UTF-8; byte counts measure the original message.
+The connection closes after one response. Multiple outgoing messages, binary uploads, interactive sessions, and session cookies are not implemented.
+JavaScript scripts and tests on protocol requests are rejected before connecting.
+
 ## Remaining port work
 
 | Area | Current status |
@@ -237,7 +333,7 @@ are not hard bounded. Run only trusted local collection scripts.
 | OAuth | Client credentials and browser authorization code with PKCE S256 and loopback redirects. Token caching and refresh flows remain unfinished. |
 | OAuth 1, AWS SigV4, digest, NTLM, WSSE | Not implemented |
 | Multipart requests and binary uploads | Streamed file uploads. Custom boundaries remain unfinished. |
-| gRPC and WebSockets | Not implemented |
+| gRPC and WebSockets | Unary RPCs with local protobuf files and one-shot WebSocket text exchange. Reflection, streaming, and interactive sessions remain unfinished. |
 | OpenAPI, Postman, Insomnia, and cURL import/export | Not implemented |
 | Bruno YAML collections | Not implemented |
 | Proxy configuration, client certificates, custom CAs | No desktop configuration. reqwest handles its default networking. |

@@ -53,6 +53,7 @@ pub struct Assertion {
 pub struct Engine {
     client: Client,
     token_client: Client,
+    timeout: Duration,
 }
 
 impl Engine {
@@ -75,6 +76,7 @@ impl Engine {
         Ok(Self {
             client,
             token_client,
+            timeout,
         })
     }
 
@@ -97,6 +99,9 @@ impl Engine {
         variables: &Variables,
         root: &Path,
     ) -> Result<Response> {
+        if request.block("ws").is_some() || request.block("grpc").is_some() {
+            return crate::protocols::send(request, defaults, variables, root, self.timeout);
+        }
         let documents: Vec<&Document> = defaults.iter().chain(std::iter::once(request)).collect();
         for document in &documents {
             validate(document)?;
@@ -476,7 +481,7 @@ fn validate(document: &Document) -> Result<()> {
     Ok(())
 }
 
-fn resolve_auth<'doc>(
+pub(crate) fn resolve_auth<'doc>(
     request: &'doc Document,
     method: &str,
     defaults: &'doc [Document],
@@ -535,7 +540,7 @@ fn replace_path_parameter(url: &str, key: &str, value: &str) -> Result<String> {
     ))
 }
 
-fn validate_assertion(expression: &str, expected: &str) -> Result<()> {
+pub(crate) fn validate_assertion(expression: &str, expected: &str) -> Result<()> {
     Selector::parse(expression)?;
     let operator = expected.split_whitespace().next().unwrap_or("");
     if !matches!(
@@ -558,7 +563,7 @@ fn validate_assertion(expression: &str, expected: &str) -> Result<()> {
     Ok(())
 }
 
-fn evaluate_assertion(pair: Pair, response: &Response) -> Result<Assertion> {
+pub(crate) fn evaluate_assertion(pair: Pair, response: &Response) -> Result<Assertion> {
     let Pair {
         key,
         value,

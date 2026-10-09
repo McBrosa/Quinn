@@ -9,5 +9,6 @@ pub use error::{Error, Result};
 mod oauth;
 mod oauth_interactive;
 mod scripts;
+mod protocols;
 mod selectors;
 mod uploads;

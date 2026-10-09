@@ -28,13 +28,26 @@ boa_parser = "0.22"
 boa_engine = { version = "0.22", default-features = false, features = ["fuzz"] }
 clap = { version = "4.6", features = ["derive"] }
 eframe = { version = "0.36.2", optional = true, default-features = false, features = ["accesskit", "default_fonts", "glow", "wayland", "x11"] }
+base64 = "0.22"
+futures-util = { version = "0.3", features = ["sink"] }
+http = "1"
 percent-encoding = "2.3"
+prost = "0.14"
+prost-reflect = { version = "0.16.5", features = ["serde"] }
+protox = "0.10"
 reqwest = { version = "0.13.5", features = ["blocking", "cookies", "form", "gzip", "json", "query", "multipart"] }
 rfd = { version = "0.17.2", optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
 tempfile = "3"
+tokio = { version = "1", features = ["rt", "net", "time"] }
+tokio-tungstenite = { version = "0.30", features = ["rustls-tls-native-roots"] }
+tonic = { version = "0.14.6", default-features = false, features = ["channel", "tls-native-roots"] }
+
+[dev-dependencies]
+bytes = "1"
+h2 = "0.4"
 
 [lints.rust]
 unsafe_code = "forbid"

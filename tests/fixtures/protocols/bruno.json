@@ -1,0 +1,9 @@
+{
+  "version": "1",
+  "name": "Protocol fixtures",
+  "type": "collection",
+  "protobuf": {
+    "protoFiles": [{ "path": "echo.proto", "type": "file" }],
+    "importPaths": [{ "path": ".", "enabled": true }]
+  }
+}

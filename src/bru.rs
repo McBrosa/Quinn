@@ -56,7 +56,9 @@ impl Document {
             if !closed {
                 return Err(parse_error(index + 1, format!("unclosed '{name}' block")));
             }
-            if blocks.iter().any(|block: &Block| block.name == name) && name != "example" {
+            if blocks.iter().any(|block: &Block| block.name == name)
+                && !matches!(name, "example" | "body:ws" | "body:grpc")
+            {
                 return Err(parse_error(index + 1, format!("duplicate '{name}' block")));
             }
             blocks.push(Block {
