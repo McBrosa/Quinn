@@ -3,6 +3,8 @@ use std::{path::PathBuf, process::ExitCode, time::Duration};
 use clap::{Args as ClapArgs, Parser, Subcommand, ValueEnum};
 use quinn_api::{Error, Result, collection, engine::Engine, variables::Variables};
 
+mod reports;
+
 #[cfg(feature = "desktop")]
 mod desktop;
 #[cfg(feature = "desktop")]
@@ -65,6 +67,12 @@ enum Command {
         /// Write a JSON report to stdout.
         #[arg(long)]
         json: bool,
+        /// Write JSON results to a new file. Reports can contain secrets.
+        #[arg(long)]
+        reporter_json: Option<PathBuf>,
+        /// Write one JUnit test case per attempted request to a new XML file.
+        #[arg(long)]
+        reporter_junit: Option<PathBuf>,
         /// Stop after the first failed request, assertion, script, or extraction.
         #[arg(long)]
         bail: bool,
@@ -257,6 +265,8 @@ fn run(args: Args) -> Result<bool> {
             variables,
             timeout,
             json,
+            reporter_json,
+            reporter_junit,
             bail,
             delay,
             tags,
@@ -276,6 +286,8 @@ fn run(args: Args) -> Result<bool> {
                     reason: "no requests match the tag filters".into(),
                 });
             }
+            let collect_report = json || reporter_json.is_some() || reporter_junit.is_some();
+            let output_reports = reports::Reports::reserve(reporter_json, reporter_junit)?;
             let mut values = env.map_or_else(
                 || Ok(Variables::new()),
                 |name| collection::environment(&root, &name),
@@ -300,9 +312,7 @@ fn run(args: Args) -> Result<bool> {
                         passed &= response.passed();
                         values.extend(response.variables.clone());
                         values.extend(overrides.clone());
-                        if json {
-                            report.push(serde_json::json!({"path": entry.path, "name": entry.name, "passed": response.passed(), "response": response}));
-                        } else {
+                        if !json {
                             println!(
                                 "{} {}  {}  {} ms  {} bytes",
                                 if response.passed() { "PASS" } else { "FAIL" },
@@ -325,13 +335,29 @@ fn run(args: Args) -> Result<bool> {
                             }
                             println!("{}\n", response.pretty_body());
                         }
+                        if collect_report {
+                            report.push(reports::Entry {
+                                path: entry.path,
+                                name: entry.name,
+                                passed: response.passed(),
+                                response: Some(response),
+                                error: None,
+                            });
+                        }
                     }
                     Err(error) => {
                         passed = false;
-                        if json {
-                            report.push(serde_json::json!({"path": entry.path, "name": entry.name, "passed": false, "error": error.to_string()}));
-                        } else {
+                        if !json {
                             eprintln!("FAIL {}: {error}", entry.path.display());
+                        }
+                        if collect_report {
+                            report.push(reports::Entry {
+                                path: entry.path,
+                                name: entry.name,
+                                passed: false,
+                                response: None,
+                                error: Some(error.to_string()),
+                            });
                         }
                     }
                 }
@@ -339,6 +365,7 @@ fn run(args: Args) -> Result<bool> {
                     break;
                 }
             }
+            output_reports.write(&report)?;
             if json {
                 println!(
                     "{}",

@@ -61,6 +61,10 @@ cargo run --locked -- run examples/starter/01-get.bru \
 # Produce a JSON report for CI.
 cargo run --locked -- run examples/starter --env Local --json
 
+# Save JSON and JUnit reports to new files.
+quinn run examples/starter --env Local \
+  --reporter-json results.json --reporter-junit results.xml
+
 # Build the CLI without desktop dependencies.
 cargo install --locked --path . --no-default-features
 quinn run examples/starter --env Local
@@ -71,6 +75,14 @@ It runs requests sequentially and continues after a failed request by default.
 Use `--bail` to stop after the first failure, including failed tests or variable extraction.
 Use `--delay MILLISECONDS` to pause between request attempts. The accepted range is 0 to 3,600,000.
 The first request has no delay. A stopped run includes only attempted requests in its JSON report.
+
+`--reporter-json PATH` writes the same results as `--json` to a file.
+`--reporter-junit PATH` writes one JUnit test case for each attempted request.
+HTTP, assertion, script, and extraction failures count as test failures. Request errors count as errors.
+Both flags work together and with `--bail`. Existing files and symbolic links are never overwritten.
+Destinations are reserved before requests run. A setup or write failure can leave an empty or partial file.
+JSON reports contain response bodies and headers. JUnit failure messages can contain assertion values.
+Treat report files as sensitive data. HTML reports and Bruno's exact JSON schema are not implemented.
 
 Use `--tags smoke,api` to run requests with any included tag.
 Use `--exclude-tags wip` to exclude requests with any excluded tag.

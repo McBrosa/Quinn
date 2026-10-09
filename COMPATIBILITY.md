@@ -99,6 +99,12 @@ If any extraction fails, Quinn publishes no variables from that response.
 Previously extracted variables remain available.
 Extracted strings remain strings. Other JSON values become JSON text.
 JSON reports omit the extracted-variable map, but response bodies and headers can still contain secrets.
+The CLI supports `--reporter-json PATH` and `--reporter-junit PATH` with new-file-only destinations.
+JSON file reports match Quinn's `--json` output, not Bruno's report schema.
+JUnit uses one test case per attempted request. It includes partial results after `--bail`.
+Request errors produce JUnit errors. HTTP, assertion, script, and extraction failures produce JUnit failures.
+JUnit omits response bodies and headers, but failure messages can contain sensitive assertion values.
+HTML reports, reporter redaction flags, and separate test cases for each assertion are not implemented.
 
 Headers inherit from the collection and enclosing folders.
 A request header overrides the inherited header with the same case-insensitive name.

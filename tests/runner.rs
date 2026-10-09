@@ -53,8 +53,9 @@ fn bail_stops_after_preflight_error_and_default_continues() {
 }
 
 #[test]
-fn bail_stops_after_http_assertion_and_script_failures() {
+fn junit_records_success_and_bail_stops_after_http_assertion_and_script_failures() {
     for (status, suffix) in [
+        ("200 OK", ""),
         ("500 Internal Server Error", ""),
         ("200 OK", "assert {\n  res.status: eq 201\n}\n"),
         (
@@ -100,13 +101,110 @@ fn bail_stops_after_http_assertion_and_script_failures() {
             .unwrap();
         });
         let directory = collection(&format!("get {{\n  url: {url}\n}}\n{suffix}"));
-        let (output, report) = run(&directory, &["--bail"]);
+        let junit_path = directory.path().join("results.xml");
+        let success = status == "200 OK" && suffix.is_empty();
+        let first_path = directory.path().join("01-first.bru");
+        let output = Command::new(env!("CARGO_BIN_EXE_quinn"))
+            .arg("run")
+            .arg(if success {
+                first_path.as_path()
+            } else {
+                directory.path()
+            })
+            .args(["--json", "--no-proxy", "--bail", "--reporter-junit"])
+            .arg(&junit_path)
+            .output()
+            .unwrap();
+        let report: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).unwrap();
         server.join().unwrap();
-        assert!(!output.status.success());
+        assert_eq!(output.status.success(), success);
         assert_eq!(report.len(), 1);
-        assert_eq!(report[0]["passed"], false);
+        assert_eq!(report[0]["passed"], success);
         assert!(report[0]["response"].is_object());
+        let xml = fs::read_to_string(junit_path).unwrap();
+        assert!(
+            xml.contains(&format!(
+                "tests=\"1\" failures=\"{}\" errors=\"0\"",
+                usize::from(!success)
+            )),
+            "{xml}"
+        );
+        assert_eq!(xml.contains("<failure message=\""), !success);
+        assert!(report[0]["response"].get("variables").is_none());
     }
+}
+
+#[test]
+fn reporter_files_preserve_json_shape_and_partial_bail_results() {
+    let directory = collection("get {\n  url: not-a-url\n}\n");
+    let json_path = directory.path().join("results.json");
+    let junit_path = directory.path().join("results.xml");
+    let (output, report) = run(
+        &directory,
+        &[
+            "--bail",
+            "--reporter-json",
+            json_path.to_str().unwrap(),
+            "--reporter-junit",
+            junit_path.to_str().unwrap(),
+        ],
+    );
+    assert!(!output.status.success());
+    assert_eq!(report.len(), 1);
+    let file_report: Vec<serde_json::Value> =
+        serde_json::from_slice(&fs::read(json_path).unwrap()).unwrap();
+    assert_eq!(report, file_report);
+    assert!(!report[0].as_object().unwrap().contains_key("response"));
+    let xml = fs::read_to_string(junit_path).unwrap();
+    assert!(xml.contains("tests=\"1\" failures=\"0\" errors=\"1\""));
+    assert!(xml.contains("<error message=\""));
+    assert_eq!(xml.matches("<testcase ").count(), 1);
+}
+
+#[test]
+fn existing_report_destinations_fail_before_network_or_overwrite() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let directory = collection(&format!(
+        "get {{\n  url: http://{}\n}}\n",
+        listener.local_addr().unwrap()
+    ));
+    let destination = directory.path().join("preserve.json");
+    fs::write(&destination, "user data").unwrap();
+    for flag in ["--reporter-json", "--reporter-junit"] {
+        let output = Command::new(env!("CARGO_BIN_EXE_quinn"))
+            .arg("run")
+            .arg(directory.path())
+            .args(["--no-proxy", flag])
+            .arg(&destination)
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("already exists"));
+        assert_eq!(fs::read_to_string(&destination).unwrap(), "user data");
+        assert_eq!(
+            listener.accept().unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock
+        );
+    }
+}
+
+#[test]
+fn reporter_destinations_must_be_distinct_before_network() {
+    let directory = collection("get {\n  url: http://127.0.0.1:1\n}\n");
+    let destination = directory.path().join("same.json");
+    let output = Command::new(env!("CARGO_BIN_EXE_quinn"))
+        .arg("run")
+        .arg(directory.path())
+        .arg("--reporter-json")
+        .arg(&destination)
+        .arg("--reporter-junit")
+        .arg(&destination)
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("distinct destinations"));
+    assert!(!destination.exists());
 }
 
 #[test]
