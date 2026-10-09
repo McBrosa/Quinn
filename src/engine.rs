@@ -22,7 +22,7 @@ use crate::{
     digest,
     network::NetworkOptions,
     oauth::{TokenCache, TokenRequest},
-    scripts,
+    oauth1, scripts,
     selectors::Selector,
     uploads,
     variables::{Variables, interpolate},
@@ -237,7 +237,7 @@ impl Engine {
                 headers.insert(name, value);
             }
         }
-        let client = if matches!(auth.as_str(), "digest" | "awsv4") {
+        let client = if matches!(auth.as_str(), "digest" | "awsv4" | "oauth1") {
             &self.digest_client
         } else {
             &self.client
@@ -252,6 +252,7 @@ impl Engine {
         let mut oauth = None;
         let mut digest = None;
         let mut aws = None;
+        let mut oauth1 = None;
         match auth.as_str() {
             "none" => {}
             "basic" => {
@@ -277,6 +278,7 @@ impl Engine {
                 digest = Some((auth_value("username")?, auth_value("password")?));
             }
             "oauth2" => oauth = Some(TokenRequest::prepare(auth_document, &all_variables)?),
+            "oauth1" => oauth1 = Some(oauth1::Signing::prepare(auth_document, &all_variables)?),
             "awsv4" => {
                 let signing = Signing::prepare(auth_document, &all_variables)?;
                 signing.validate_url(&expanded_url, &url)?;
@@ -310,7 +312,7 @@ impl Engine {
         let body_type = request
             .value(&block.name, "body")?
             .unwrap_or_else(|| "none".into());
-        if (digest.is_some() || aws.is_some())
+        if (digest.is_some() || aws.is_some() || oauth1.is_some())
             && matches!(
                 body_type.as_str(),
                 "file" | "multipartForm" | "multipart-form"
@@ -430,7 +432,11 @@ impl Engine {
             );
         }
         let start = Instant::now();
-        let mut raw_response = if let Some(aws) = aws {
+        let mut raw_response = if let Some(oauth1) = oauth1 {
+            let mut request = builder.build().map_err(Error::http)?;
+            oauth1.sign(&mut request)?;
+            self.digest_client.execute(request).map_err(Error::http)?
+        } else if let Some(aws) = aws {
             let mut request = builder.build().map_err(Error::http)?;
             aws.sign(&mut request)?;
             self.digest_client.execute(request).map_err(Error::http)?
@@ -545,6 +551,7 @@ fn validate(document: &Document) -> Result<()> {
                     | "auth:bearer"
                     | "auth:apikey"
                     | "auth:oauth2"
+                    | "auth:oauth1"
                     | "params:query"
                     | "params:path"
                     | "query"

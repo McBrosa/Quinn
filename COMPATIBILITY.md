@@ -212,6 +212,47 @@ AWS profiles, ambient credentials, credential discovery, presigned URLs, SigV4a,
 Native Forms do not yet expose AWS fields. Use Source to edit these requests.
 Use HTTPS for real credentials, especially when a session token is configured.
 
+## OAuth 1 request signing
+
+HTTP requests support preobtained OAuth 1 consumer and token credentials:
+
+```bru
+get {
+  url: https://api.example.com/resource
+  auth: oauth1
+}
+auth:oauth1 {
+  consumer_key: {{consumer_key}}
+  consumer_secret: {{consumer_secret}}
+  access_token: {{access_token}}
+  token_secret: {{token_secret}}
+  signature_method: HMAC-SHA1
+  placement: header
+  realm: Example
+}
+```
+
+`consumer_key` and `consumer_secret` must be nonempty. Token credentials and `realm` are optional.
+`realm` uses a quoted HTTP realm value and must contain printable ASCII.
+`signature_method` defaults to `HMAC-SHA1`. `HMAC-SHA256` is also supported.
+Quinn generates a cryptographic nonce and current timestamp for each request. The header includes `oauth_version="1.0"`.
+Variables and collection/folder authentication inheritance are supported.
+Signing follows the final method, URL, query, and form-urlencoded bytes after pre-request scripts.
+Duplicate parameters remain in their original wire order. Only the signing representation is sorted.
+
+[RFC 5849](https://www.rfc-editor.org/rfc/rfc5849) defines the parameter normalization and HMAC-SHA1 signature.
+Query and form parameters use form decoding: `+` means space, while `%2B` means a literal plus sign.
+This differs from Bruno's current literal-plus query behavior. Use `%2B` for literal URL plus signs.
+Malformed escapes, non-UTF-8 parameters, and more than 10,000 combined parameters are rejected.
+Authentication fields have a 16 KiB limit each. Errors do not include their values.
+
+Explicit authentication or Host headers, URL credentials, fragments, and `oauth_*` query/form fields are rejected before network access.
+File and multipart bodies are rejected before file access. Signed requests never follow redirects, including same-origin redirects.
+Token acquisition, callback/verifier fields, custom nonce/timestamp values, private keys, PLAINTEXT/RSA signatures, and body-hash extensions remain unsupported.
+Empty unsupported fields and `include_body_hash: false` are accepted as harmless exported defaults.
+Only header placement and version `1.0` are supported.
+Nonform bodies, including JSON, are not included in the signature. Use HTTPS for payload integrity and credential confidentiality.
+
 ## OAuth 2 client credentials
 
 Quinn supports the [client-credentials grant](https://www.rfc-editor.org/rfc/rfc6749#section-4.4).
@@ -644,7 +685,8 @@ Custom configuration for gRPC and WebSockets, per-host certificates, and desktop
 | OAuth | Client credentials and browser authorization code with PKCE S256 and loopback redirects. In-memory expiry-aware token caching and refresh-token rotation. No persistent token store or automatic API replay. |
 | HTTP Digest | MD5/SHA-256 auth or no-qop challenges, one buffered-body retry, no redirects. File/multipart replay and extended algorithms remain unsupported. |
 | AWS SigV4 | Explicit-credential HTTP signing with buffered bodies; no profiles, presigned URLs, streaming signatures, or native forms. |
-| OAuth 1, NTLM, WSSE | Not implemented |
+| OAuth 1 | Explicit-credential HMAC-SHA1/SHA256 HTTP signing with header placement; no token acquisition, RSA, or body-hash extension. |
+| NTLM, WSSE | Not implemented |
 | Multipart requests and binary uploads | Streamed file uploads. Custom boundaries remain unfinished. |
 | gRPC and WebSockets | Unary and finite streaming RPCs with local protobuf files or server reflection, plus one-shot WebSocket exchange. Interactive sessions remain unfinished. |
 | OpenAPI, Postman, Insomnia, and cURL import/export | Offline Postman v2.1, OpenAPI 3 JSON/YAML, Insomnia v4 JSON, and cURL imports. Supported HTTP subsets export to Postman v2.1 and OpenAPI 3 JSON. |

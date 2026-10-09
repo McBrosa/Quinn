@@ -102,7 +102,7 @@ The default timeout is 30 seconds. Use `--timeout SECONDS` to change it.
 ## Supported features
 
 - HTTP methods, custom methods, query parameters, and path parameters.
-- Headers, basic, Digest, and AWS Signature V4 authentication, bearer tokens, API keys, and OAuth 2 client credentials or browser authorization with PKCE.
+- Headers, basic, Digest, AWS Signature V4, and OAuth 1 signing, bearer tokens, API keys, and OAuth 2 client credentials or browser authorization with PKCE.
 - JSON, text, XML, SPARQL, form-urlencoded, GraphQL, multipart, and binary request bodies.
 - Bruno environments, nested variables, collection defaults, and folder defaults.
 - Status, response body, header, and response-time assertions.

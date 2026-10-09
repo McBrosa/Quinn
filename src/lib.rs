@@ -13,6 +13,7 @@ pub use error::{Error, Result};
 mod aws;
 mod digest;
 mod oauth;
+mod oauth1;
 mod oauth_interactive;
 mod opencollection;
 mod protocols;
