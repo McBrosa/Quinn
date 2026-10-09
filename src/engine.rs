@@ -18,6 +18,7 @@ use crate::{
     Error, Result,
     bru::{Document, Pair},
     oauth::TokenRequest,
+    scripts,
     selectors::Selector,
     uploads,
     variables::{Variables, interpolate},
@@ -100,6 +101,32 @@ impl Engine {
         for document in &documents {
             validate(document)?;
         }
+        let mut all_variables = Variables::new();
+        for document in &documents {
+            for pair in document
+                .pairs("vars:pre-request")?
+                .into_iter()
+                .filter(|pair| pair.enabled)
+            {
+                all_variables.insert(pair.key, pair.value);
+            }
+        }
+        all_variables.extend(variables.clone());
+        let method_block = METHODS
+            .iter()
+            .find(|name| request.block(name).is_some())
+            .ok_or_else(|| Error::invalid("request has no HTTP method block"))?;
+        let pre = scripts::run(
+            &documents,
+            &["script:pre-request"],
+            request,
+            method_block,
+            &all_variables,
+            None,
+        )?;
+        all_variables.extend(pre.variables.clone());
+        let request = &pre.request;
+        let documents: Vec<&Document> = defaults.iter().chain(std::iter::once(request)).collect();
         let methods: Vec<_> = METHODS
             .iter()
             .filter_map(|name| request.block(name))
@@ -122,17 +149,6 @@ impl Engine {
         let raw_url = request
             .value(&block.name, "url")?
             .ok_or_else(|| Error::invalid("request has no URL"))?;
-        let mut all_variables = Variables::new();
-        for document in &documents {
-            for pair in document
-                .pairs("vars:pre-request")?
-                .into_iter()
-                .filter(|pair| pair.enabled)
-            {
-                all_variables.insert(pair.key, pair.value);
-            }
-        }
-        all_variables.extend(variables.clone());
         let mut expanded_url = interpolate(&raw_url, &all_variables)?;
         for pair in request
             .pairs("params:path")?
@@ -353,8 +369,8 @@ impl Engine {
             body: String::from_utf8_lossy(&bytes).into_owned(),
             bytes: bytes.len(),
             elapsed_ms: start.elapsed().as_millis(),
-            assertions: Vec::new(),
-            variables: Variables::new(),
+            assertions: pre.assertions,
+            variables: pre.variables,
             variable_errors: Vec::new(),
         };
         for pair in assertions {
@@ -368,7 +384,27 @@ impl Engine {
                 None => response.variable_errors.push(format!("cannot extract response variable '{name}': field is missing or body is not JSON")),
             }
         }
-        if !response.variable_errors.is_empty() {
+        all_variables.extend(response.variables.clone());
+        match scripts::run(
+            &documents,
+            &["script:post-response", "tests"],
+            request,
+            &block.name,
+            &all_variables,
+            Some(&response),
+        ) {
+            Ok(post) => {
+                response.variables.extend(post.variables);
+                response.assertions.extend(post.assertions);
+            }
+            Err(error) => response.variable_errors.push(error.to_string()),
+        }
+        if !response.variable_errors.is_empty()
+            || response
+                .assertions
+                .iter()
+                .any(|assertion| !assertion.passed)
+        {
             response.variables.clear();
         }
         Ok(response)
@@ -390,6 +426,7 @@ impl Response {
 }
 
 fn validate(document: &Document) -> Result<()> {
+    scripts::validate(document)?;
     for block in &document.blocks {
         if METHODS.contains(&block.name.as_str())
             || matches!(
@@ -418,6 +455,9 @@ fn validate(document: &Document) -> Result<()> {
                     | "body:file"
                     | "body:graphql"
                     | "body:graphql:vars"
+                    | "script:pre-request"
+                    | "script:post-response"
+                    | "tests"
             )
         {
             continue;

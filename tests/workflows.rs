@@ -217,6 +217,139 @@ fn engine() -> Engine {
     Engine::new(Duration::from_secs(3)).unwrap()
 }
 
+#[test]
+fn javascript_scripts_mutate_requests_chain_variables_and_report_tests() {
+    let (url, handle) = server(vec![r#"{"token":"abc","items":[1,2]}"#]);
+    let source = format!(
+        r#"post {{
+  url: {url}/original
+  body: json
+}}
+body:json {{
+  {{"name":"original"}}
+}}
+script:pre-request {{
+  bru.setVar("name", "Quinn");
+  req.setUrl("{url}/scripted");
+  req.setMethod("PUT");
+  req.setHeader("X-Name", bru.getVar("name"));
+  req.setBody({{name: bru.getVar("name")}});
+}}
+script:post-response {{
+  bru.setVar("token", res.getBody().token);
+}}
+tests {{
+  test("status", () => expect(res.status).to.equal(200));
+  test("body", () => expect(res.getBody().items).to.deep.equal([1,2]));
+  test("runtime variable", () => assert.equal(bru.getVar("token"), "abc"));
+}}
+"#
+    );
+    let request = Document::parse(&source).unwrap();
+    let response = engine().send(&request, &[], &Variables::new()).unwrap();
+    assert!(response.passed());
+    assert_eq!(response.assertions.len(), 3);
+    assert_eq!(
+        response.variables.get("name").map(String::as_str),
+        Some("Quinn")
+    );
+    assert_eq!(
+        response.variables.get("token").map(String::as_str),
+        Some("abc")
+    );
+    let sent = String::from_utf8(handle.join().unwrap().remove(0)).unwrap();
+    assert!(sent.starts_with("PUT /scripted "));
+    assert!(sent.to_lowercase().contains("x-name: quinn"));
+    assert!(sent.ends_with(r#"{"name":"Quinn"}"#));
+}
+
+#[test]
+fn javascript_failed_tests_and_script_errors_preserve_responses_without_variables() {
+    for script in [
+        r#"test("failed", () => expect(res.status).to.equal(201));"#,
+        r#"bru.setVar("partial", "secret"); throw Error("broken");"#,
+    ] {
+        let (url, handle) = server(vec![r#"{"ok":true}"#]);
+        let source = format!(
+            "get {{\n url: {url}\n}}\nscript:post-response {{\n bru.setVar(\"token\", \"abc\");\n}}\ntests {{\n {script}\n}}\n"
+        );
+        let response = engine()
+            .send(&Document::parse(&source).unwrap(), &[], &Variables::new())
+            .unwrap();
+        assert!(!response.passed());
+        assert_eq!(response.status, 200);
+        assert!(response.variables.is_empty());
+        handle.join().unwrap();
+    }
+}
+
+#[test]
+fn javascript_limits_and_unsupported_apis_fail_before_network_io() {
+    for script in [
+        "while (true) {}",
+        "function recursive() { recursive(); } recursive();",
+        "bru.runRequest('other');",
+        "require('fs');",
+        "Promise.resolve(1);",
+        "eval('async function hidden() {}');",
+        "async function pending() {await new Promise(() => {});} pending();",
+    ] {
+        let source =
+            format!("get {{\n url: http://127.0.0.1:1\n}}\nscript:pre-request {{\n {script}\n}}\n");
+        let error = engine()
+            .send(&Document::parse(&source).unwrap(), &[], &Variables::new())
+            .unwrap_err();
+        assert!(
+            !matches!(error, quinn_api::Error::Http { .. }),
+            "{script}: {error}"
+        );
+    }
+}
+
+#[test]
+fn javascript_inherited_scripts_and_tests_run_outermost_first() {
+    let defaults = [
+        Document::parse("script:pre-request {\n bru.setVar(\"order\", \"collection\");\n}\nscript:post-response {\n bru.setVar(\"after\", \"collection\");\n}\ntests {\n test(\"outer\", () => expect(bru.getVar(\"after\")).to.equal(\"collection,folder,request\"));\n}\n").unwrap(),
+        Document::parse("script:pre-request {\n bru.setVar(\"order\", bru.getVar(\"order\") + \",folder\");\n}\nscript:post-response {\n bru.setVar(\"after\", bru.getVar(\"after\") + \",folder\");\n}\n").unwrap(),
+    ];
+    let (url, handle) = server(vec!["{}"]);
+    let source = format!(
+        "get {{\n url: {url}/{{{{order}}}}\n}}\nscript:pre-request {{\n bru.setVar(\"order\", bru.getVar(\"order\") + \",request\");\n}}\nscript:post-response {{\n bru.setVar(\"after\", bru.getVar(\"after\") + \",request\");\n}}\ntests {{\n test(\"inner\", () => expect(res.status).to.equal(200));\n}}\n"
+    );
+    let response = engine()
+        .send(
+            &Document::parse(&source).unwrap(),
+            &defaults,
+            &Variables::new(),
+        )
+        .unwrap();
+    assert!(response.passed());
+    assert_eq!(response.assertions.len(), 2);
+    assert_eq!(response.variables["after"], "collection,folder,request");
+    let sent = String::from_utf8(handle.join().unwrap().remove(0)).unwrap();
+    assert!(sent.starts_with("GET /collection,folder,request "));
+}
+
+#[test]
+fn javascript_post_error_preserves_completed_test_results() {
+    let (url, handle) = server(vec!["{}"]);
+    let source = format!(
+        "get {{\n url: {url}\n}}\ntests {{\n test(\"completed\", () => expect(res.status).to.equal(200));\n throw Error(\"cannot finish\");\n}}\n"
+    );
+    let response = engine()
+        .send(&Document::parse(&source).unwrap(), &[], &Variables::new())
+        .unwrap();
+    assert!(!response.passed());
+    assert_eq!(response.assertions.len(), 2);
+    assert!(
+        response
+            .assertions
+            .iter()
+            .any(|assertion| assertion.passed && assertion.expression == "test: completed")
+    );
+    handle.join().unwrap();
+}
+
 fn body(request: &[u8]) -> &[u8] {
     let start = request
         .windows(4)

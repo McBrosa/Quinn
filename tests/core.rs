@@ -261,8 +261,7 @@ fn engine_sends_graphql_and_reports_failed_assertion() {
 fn engine_rejects_unsupported_features_before_network_io() {
     let engine = Engine::new(Duration::from_secs(1)).unwrap();
     for extra in [
-        "script:pre-request {\n  console.log('hi');\n}\n",
-        "tests {\n  expect(true);\n}\n",
+        "unknown-executable {\n  unsafe();\n}\n",
         "assert {\n  res.status: mystery 200\n}\n",
     ] {
         let request =

@@ -191,12 +191,49 @@ Legacy `$res` prefixes are also supported.
 JavaScript expressions, single-quoted keys, and regex assertions are not supported.
 Failed assertions and HTTP status codes of 400 or greater fail the CLI run.
 
+## JavaScript
+
+Quinn executes collection, folder, and request scripts with the Rust Boa engine.
+Pre-request scripts run outermost first, before request interpolation.
+Post-response scripts run outermost first, followed by outermost-first tests.
+Each phase has a fresh JavaScript context. Runtime variables carry across phases.
+`bru.setVar` updates runtime variables only, without saving files.
+If extraction, a script, or a test fails, Quinn publishes no variables from the request.
+Post-response errors preserve the HTTP response for inspection.
+Pre-request exceptions stop the request before network IO.
+
+Supported `bru` methods: `getVar`, `hasVar`, `setVar`, and `interpolate`.
+Variable values remain strings; other values passed to `setVar` become JSON text.
+Supported `req` methods: `getUrl`, `getMethod`, `getHeader`, `getHeaders`,
+`getBody`, `setUrl`, `setMethod`, `setHeader`, and `setBody`.
+`setBody` supports existing JSON, text, XML, and SPARQL body blocks.
+Request getters see configured source values before interpolation.
+Headers are case-insensitive.
+Supported `res` methods: `getStatus`, `getBody`, `getHeaders`, `getHeader`,
+and `getResponseTime`. Corresponding `status`, `body`, `headers`, and `responseTime`
+properties are also available. JSON response bodies are parsed; other bodies remain strings.
+
+`test(name, callback)` records synchronous callback success or failure.
+The `expect` subset includes equality, deep equality, inclusion, numeric ranges,
+type checks, properties, `not`, and boolean/existence predicates.
+`assert`, `assert.equal`, `assert.deepEqual`, `assert.isTrue`, and `assert.isFalse`
+are supported. This is not a complete Chai implementation.
+Unknown APIs fail explicitly. Dynamic code generation (`eval`, `Function`), Node modules, host IO, timers, console logging,
+environment mutation, persistence, and request-runner control are not provided.
+Promises and asynchronous tests are unsupported; Quinn does not drain Promise jobs.
+
+Each phase limits execution to one million VM instructions, 100,000 loop iterations,
+128 recursive calls, and 16,384 VM stack entries.
+Each script is limited to 64 KiB and serialized output to 1 MiB.
+These limits do not form a security sandbox: built-in operations and heap allocation
+are not hard bounded. Run only trusted local collection scripts.
+
 ## Remaining port work
 
 | Area | Current status |
 | --- | --- |
 | Desktop request forms, tabs, syntax highlighting | `.bru` source editor only |
-| JavaScript scripts and tests | Rejected before sending |
+| JavaScript scripts and tests | Embedded synchronous subset; Node APIs, async jobs, full Chai, and runner control remain unfinished |
 | OAuth | Client credentials and browser authorization code with PKCE S256 and loopback redirects. Token caching and refresh flows remain unfinished. |
 | OAuth 1, AWS SigV4, digest, NTLM, WSSE | Not implemented |
 | Multipart requests and binary uploads | Streamed file uploads. Custom boundaries remain unfinished. |
@@ -205,7 +242,7 @@ Failed assertions and HTTP status codes of 400 or greater fail the CLI run.
 | Bruno YAML collections | Not implemented |
 | Proxy configuration, client certificates, custom CAs | No desktop configuration. reqwest handles its default networking. |
 | Bruno secret storage and integrations | Not implemented |
-| Response-variable extraction and runner scripting | JSON selectors and request chaining are supported. JavaScript remains unfinished. |
-| Collection/folder tests and full ordering semantics | Static defaults and supported assertions only |
+| Response-variable extraction and runner scripting | JSON selectors, JavaScript runtime variables, and sequential chaining; runner control remains unfinished |
+| Collection/folder tests and full ordering semantics | Inherited synchronous tests and assertions; full ordering remains unfinished |
 | Large downloads, streaming, binary response preview | 16 MiB text preview limit |
 | Installers, signing, auto-update | CI executable artifacts only |

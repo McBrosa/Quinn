@@ -71,6 +71,7 @@ The default timeout is 30 seconds. Use `--timeout SECONDS` to change it.
 - Status, response body, header, and response-time assertions.
 - Cookies within one app session or CLI run.
 - Response variables that pass tokens and IDs between requests.
+- Embedded JavaScript scripts and synchronous tests with bounded execution.
 - Response bodies, headers, timing, byte counts, and JSON reports.
 
 Quinn rejects unsupported executable blocks before it sends a request.
@@ -103,6 +104,19 @@ Quinn fetches a fresh token for each request and sends it as a Bearer token.
 Authorization-code requests open the system browser and receive the redirect on a local loopback address.
 The browser step has a two-minute timeout. Provider denial cancels the request.
 See [COMPATIBILITY.md](COMPATIBILITY.md) for configuration examples and limits.
+
+## JavaScript scripts
+
+JavaScript runs in the Rust Boa engine.
+Use `bru.getVar`, `bru.hasVar`, `bru.setVar`, and `bru.interpolate` for runtime variables.
+Use `req` getters and setters for the URL, method, headers, and JSON/text bodies.
+Use `res` getters or properties for the response status, body, headers, and timing.
+Use `test(name, callback)` with `expect` or `assert` for synchronous tests.
+Results appear with assertions in the desktop and CLI. Failures publish no new runtime variables.
+Node modules, host IO, timers, persistence, environment mutation, and runner-control APIs are not exposed.
+Promise-based operations and asynchronous tests are unsupported.
+Run only trusted local scripts: built-in operations and heap allocations do not have hard wall-clock or memory limits.
+See [COMPATIBILITY.md](COMPATIBILITY.md) for the supported subset.
 
 ## Development
 
