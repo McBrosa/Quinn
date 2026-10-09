@@ -23,6 +23,9 @@ For the example collection, select **Local**.
 Edit the request in **Forms** or **Source**.
 Then click **Send**.
 Forms provide method, URL, headers, query/path parameters, authentication, and body editors.
+AWS Signature V4 and OAuth 1 fields are available in the Auth tab.
+Credential values are masked until you select **Show credential values**.
+Save still writes plaintext credentials. Use `{{variables}}` for secrets.
 Save and Send apply pending form changes. **Apply form changes** updates Source without saving.
 Apply or discard form drafts before editing Source.
 Send uses the current editor contents, including unsaved edits.

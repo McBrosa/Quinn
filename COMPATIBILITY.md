@@ -209,7 +209,7 @@ Explicit signing headers, URL credentials, fragments, and presigned URL paramete
 Signed requests never follow redirects, including same-origin redirects, regardless of `--max-redirects`.
 File and multipart bodies are rejected before file or network access.
 AWS profiles, ambient credentials, credential discovery, presigned URLs, SigV4a, and streaming signatures remain unsupported.
-Native Forms do not yet expose AWS fields. Use Source to edit these requests.
+Native Forms expose explicit AWS credential and scope fields. Unsupported active authentication settings use Source instead.
 Use HTTPS for real credentials, especially when a session token is configured.
 
 ## OAuth 1 request signing
@@ -251,6 +251,7 @@ File and multipart bodies are rejected before file access. Signed requests never
 Token acquisition, callback/verifier fields, custom nonce/timestamp values, private keys, PLAINTEXT/RSA signatures, and body-hash extensions remain unsupported.
 Empty unsupported fields and `include_body_hash: false` are accepted as harmless exported defaults.
 Only header placement and version `1.0` are supported.
+Native Forms expose supported OAuth 1 fields. Secret values are masked by default; Save still stores plaintext. Unsupported active settings use Source instead.
 Nonform bodies, including JSON, are not included in the signature. Use HTTPS for payload integrity and credential confidentiality.
 
 ## OAuth 2 client credentials
@@ -684,7 +685,7 @@ Custom configuration for gRPC and WebSockets, per-host certificates, and desktop
 | JavaScript scripts and tests | Embedded synchronous subset; Node APIs, async jobs, full Chai, and runner control remain unfinished |
 | OAuth | Client credentials and browser authorization code with PKCE S256 and loopback redirects. In-memory expiry-aware token caching and refresh-token rotation. No persistent token store or automatic API replay. |
 | HTTP Digest | MD5/SHA-256 auth or no-qop challenges, one buffered-body retry, no redirects. File/multipart replay and extended algorithms remain unsupported. |
-| AWS SigV4 | Explicit-credential HTTP signing with buffered bodies; no profiles, presigned URLs, streaming signatures, or native forms. |
+| AWS SigV4 | Explicit-credential HTTP signing and native forms with buffered bodies; no profiles, presigned URLs, or streaming signatures. |
 | OAuth 1 | Explicit-credential HMAC-SHA1/SHA256 HTTP signing with header placement; no token acquisition, RSA, or body-hash extension. |
 | NTLM, WSSE | Not implemented |
 | Multipart requests and binary uploads | Streamed file uploads. Custom boundaries remain unfinished. |
