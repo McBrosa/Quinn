@@ -17,6 +17,7 @@ use serde_json::Value;
 use crate::{
     Error, Result,
     bru::{Document, Pair},
+    network::NetworkOptions,
     oauth::TokenRequest,
     scripts,
     selectors::Selector,
@@ -54,22 +55,34 @@ pub struct Engine {
     client: Client,
     token_client: Client,
     timeout: Duration,
+    custom_network: bool,
 }
 
 impl Engine {
     pub fn new(timeout: Duration) -> Result<Self> {
+        Self::with_network(timeout, &NetworkOptions::default())
+    }
+
+    /// Build an HTTP engine with explicit proxy and TLS configuration.
+    pub fn with_network(timeout: Duration, options: &NetworkOptions) -> Result<Self> {
         if timeout.is_zero() {
             return Err(Error::invalid("timeout must be greater than zero"));
         }
-        let client = Client::builder()
-            .timeout(timeout)
+        let prepared = options.prepare()?;
+        let redirects = if options.max_redirects == 0 {
+            reqwest::redirect::Policy::none()
+        } else {
+            reqwest::redirect::Policy::limited(options.max_redirects)
+        };
+        let client = prepared
+            .builder(timeout)
             .cookie_store(true)
             .user_agent(concat!("Quinn/", env!("CARGO_PKG_VERSION")))
-            .redirect(reqwest::redirect::Policy::limited(10))
+            .redirect(redirects)
             .build()
             .map_err(Error::http)?;
-        let token_client = Client::builder()
-            .timeout(timeout)
+        let token_client = prepared
+            .builder(timeout)
             .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(Error::http)?;
@@ -77,6 +90,7 @@ impl Engine {
             client,
             token_client,
             timeout,
+            custom_network: options.is_custom(),
         })
     }
 
@@ -100,6 +114,11 @@ impl Engine {
         root: &Path,
     ) -> Result<Response> {
         if request.block("ws").is_some() || request.block("grpc").is_some() {
+            if self.custom_network {
+                return Err(Error::Unsupported {
+                    feature: "custom network options for gRPC and WebSockets".into(),
+                });
+            }
             return crate::protocols::send(request, defaults, variables, root, self.timeout);
         }
         let documents: Vec<&Document> = defaults.iter().chain(std::iter::once(request)).collect();

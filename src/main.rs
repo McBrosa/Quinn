@@ -1,6 +1,6 @@
 use std::{path::PathBuf, process::ExitCode, time::Duration};
 
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Args as ClapArgs, Parser, Subcommand, ValueEnum};
 use quinn_api::{Error, Result, bru::Document, collection, engine::Engine, variables::Variables};
 
 #[cfg(feature = "desktop")]
@@ -34,6 +34,8 @@ enum Command {
     Gui {
         /// Collection directory to open.
         path: Option<PathBuf>,
+        #[command(flatten)]
+        network: NetworkArgs,
     },
     /// Run a request, folder, or entire collection.
     Run {
@@ -51,6 +53,8 @@ enum Command {
         /// Write a JSON report to stdout.
         #[arg(long)]
         json: bool,
+        #[command(flatten)]
+        network: NetworkArgs,
     },
     /// List requests without sending them.
     List {
@@ -59,6 +63,54 @@ enum Command {
     },
     /// Parse a request and show its blocks without sending it.
     Inspect { path: PathBuf },
+}
+
+#[derive(ClapArgs)]
+struct NetworkArgs {
+    /// HTTP/HTTPS proxy URL. Credentials in command arguments can be visible to other users.
+    #[arg(long, conflicts_with = "no_proxy")]
+    proxy: Option<String>,
+    /// Disable system and environment HTTP proxies.
+    #[arg(long)]
+    no_proxy: bool,
+    /// PEM CA bundle. Repeat to trust multiple bundles for this run only.
+    #[arg(long = "cacert")]
+    ca_certificates: Vec<PathBuf>,
+    /// PEM client certificate chain for mutual TLS.
+    #[arg(long, requires = "client_key")]
+    client_cert: Option<PathBuf>,
+    /// PEM client private key. Encrypted keys are not supported.
+    #[arg(long, requires = "client_cert")]
+    client_key: Option<PathBuf>,
+    /// HTTP redirect limit; zero disables redirects. Token endpoints never redirect.
+    #[arg(long, default_value_t = 10, value_parser = clap::value_parser!(u64).range(0..=100))]
+    max_redirects: u64,
+}
+
+impl Default for NetworkArgs {
+    fn default() -> Self {
+        Self {
+            proxy: None,
+            no_proxy: false,
+            ca_certificates: Vec::new(),
+            client_cert: None,
+            client_key: None,
+            max_redirects: 10,
+        }
+    }
+}
+
+impl NetworkArgs {
+    fn into_options(self) -> quinn_api::network::NetworkOptions {
+        quinn_api::network::NetworkOptions {
+            proxy: self.proxy,
+            no_proxy: self.no_proxy,
+            ca_certificates: self.ca_certificates,
+            client_certificate: self.client_cert,
+            client_key: self.client_key,
+            max_redirects: self.max_redirects as usize,
+        }
+    }
 }
 
 #[derive(Clone, ValueEnum)]
@@ -80,7 +132,10 @@ fn main() -> ExitCode {
 }
 
 fn run(args: Args) -> Result<bool> {
-    match args.command.unwrap_or(Command::Gui { path: None }) {
+    match args.command.unwrap_or_else(|| Command::Gui {
+        path: None,
+        network: NetworkArgs::default(),
+    }) {
         Command::Import {
             format,
             source,
@@ -100,12 +155,16 @@ fn run(args: Args) -> Result<bool> {
             );
             Ok(true)
         }
-        Command::Gui { path } => {
+        Command::Gui { path, network } => {
             #[cfg(feature = "desktop")]
-            desktop::open(path).map_err(|reason| Error::Invalid { reason })?;
+            {
+                let engine =
+                    Engine::with_network(Duration::from_secs(30), &network.into_options())?;
+                desktop::open(path, engine).map_err(|reason| Error::Invalid { reason })?;
+            }
             #[cfg(not(feature = "desktop"))]
             {
-                let _ = path;
+                let _ = (path, network);
                 Err(Error::Unsupported {
                     feature: "desktop; build with the default features or use 'quinn run'".into(),
                 })
@@ -132,6 +191,7 @@ fn run(args: Args) -> Result<bool> {
             variables,
             timeout,
             json,
+            network,
         } => {
             let root = collection::root(&path)?;
             let mut values = env.map_or_else(
@@ -146,7 +206,8 @@ fn run(args: Args) -> Result<bool> {
                     reason: "collection contains no request files".into(),
                 });
             }
-            let engine = Engine::new(Duration::from_secs(timeout))?;
+            let options = network.into_options();
+            let engine = Engine::with_network(Duration::from_secs(timeout), &options)?;
             let mut passed = true;
             let mut report = Vec::new();
             for entry in entries {

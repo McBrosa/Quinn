@@ -4,6 +4,7 @@ pub mod editor;
 pub mod engine;
 pub mod error;
 pub mod importers;
+pub mod network;
 pub mod variables;
 
 pub use error::{Error, Result};

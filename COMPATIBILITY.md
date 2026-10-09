@@ -386,6 +386,14 @@ Insomnia, export formats, and desktop import controls remain unfinished.
 
 ## Remaining port work
 
+HTTP and OAuth token transports accept explicit session-level proxy, CA-bundle, client-certificate, and redirect configuration.
+Use the CLI flags documented in the README, including when launching the desktop app.
+Explicit proxies replace system proxies. `--no-proxy` disables system and environment proxies.
+CA bundles supplement system trust. TLS verification remains enabled.
+Certificate chains and unencrypted client keys use PEM files, with a 1 MiB limit per file.
+The API redirect limit defaults to ten. Zero disables redirects. OAuth token endpoints never redirect.
+Custom configuration for gRPC and WebSockets, per-host certificates, and desktop configuration controls remain unfinished.
+
 | Area | Current status |
 | --- | --- |
 | Desktop request forms, tabs, syntax highlighting | HTTP forms and Source tabs. Syntax highlighting and protocol-specific forms remain unfinished. |
@@ -396,7 +404,7 @@ Insomnia, export formats, and desktop import controls remain unfinished.
 | gRPC and WebSockets | Unary RPCs with local protobuf files and one-shot WebSocket text exchange. Reflection, streaming, and interactive sessions remain unfinished. |
 | OpenAPI, Postman, Insomnia, and cURL import/export | Offline Postman v2.1, OpenAPI 3 JSON/YAML, and cURL imports. Insomnia and exports remain unfinished. |
 | Bruno YAML collections | Not implemented |
-| Proxy configuration, client certificates, custom CAs | No desktop configuration. reqwest handles its default networking. |
+| Proxy configuration, client certificates, custom CAs | HTTP/OAuth session configuration through CLI or library. Protocol configuration and desktop controls remain unfinished. |
 | Bruno secret storage and integrations | Not implemented |
 | Response-variable extraction and runner scripting | JSON selectors, JavaScript runtime variables, and sequential chaining; runner control remains unfinished |
 | Collection/folder tests and full ordering semantics | Inherited synchronous tests and assertions; full ordering remains unfinished |

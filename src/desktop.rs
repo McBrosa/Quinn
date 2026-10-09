@@ -7,7 +7,6 @@ use std::{
         mpsc::{self, Receiver},
     },
     thread,
-    time::Duration,
 };
 
 use eframe::egui::{
@@ -23,8 +22,7 @@ use quinn_api::{
 
 use crate::request_form::RequestForm;
 
-pub fn open(path: Option<PathBuf>) -> std::result::Result<(), String> {
-    let engine = Engine::new(Duration::from_secs(30)).map_err(|error| error.to_string())?;
+pub fn open(path: Option<PathBuf>, engine: Engine) -> std::result::Result<(), String> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1220.0, 800.0])

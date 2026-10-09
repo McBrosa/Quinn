@@ -107,6 +107,26 @@ Optional parameters without examples remain disabled.
 Unsupported scripts, authentication, file uploads, or parameter serialization stop the import.
 See [COMPATIBILITY.md](COMPATIBILITY.md) for the complete import limits.
 
+## Configure HTTP networking
+
+Use these flags with `quinn run` or `quinn gui`:
+
+~~~sh
+quinn run examples/starter --proxy http://127.0.0.1:8080
+quinn run examples/starter --no-proxy --max-redirects 0
+quinn gui examples/starter --cacert company-ca.pem \
+  --client-cert client-chain.pem --client-key client-key.pem
+~~~
+
+CA bundles add trusted certificates for this app session without changing the system trust store.
+Client certificates and unencrypted private keys use PEM files.
+TLS certificate and hostname verification remain enabled.
+HTTP API requests and OAuth token requests share the proxy and certificate configuration.
+Token endpoints never follow redirects.
+These flags do not support gRPC or WebSockets. Quinn rejects those requests if custom network configuration is active.
+Proxy credentials in command arguments can appear in the process list or shell history.
+The library provides `NetworkOptions` and `Engine::with_network` for callers that need configuration without command arguments.
+
 ## Uploads and request chains
 
 The starter collection includes a multipart upload example.
