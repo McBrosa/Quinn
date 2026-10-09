@@ -199,6 +199,33 @@ fn metadata_value(value: &Map<String, Value>) -> Result<Document> {
             }
         }
         dictionary(&mut document, "meta", pairs)?;
+        if let Some(tags) = info.get("tags").and_then(Value::as_array) {
+            let mut content = String::from("tags: [\n");
+            for tag in tags.iter().filter_map(Value::as_str) {
+                if tag.contains(['\n', '\r']) || tag.trim() == "]" {
+                    return Err(Error::invalid(
+                        "cannot represent multiline or closing-list tags",
+                    ));
+                }
+                content.push_str(tag.trim());
+                content.push('\n');
+            }
+            content.push_str("]\n");
+            if let Some(meta) = document
+                .blocks
+                .iter_mut()
+                .find(|block| block.name == "meta")
+            {
+                meta.content.push('\n');
+                meta.content.push_str(&content);
+            } else {
+                document.blocks.push(Block {
+                    name: "meta".into(),
+                    content,
+                    line: 1,
+                });
+            }
+        }
     }
     Ok(document)
 }

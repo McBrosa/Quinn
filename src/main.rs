@@ -71,6 +71,12 @@ enum Command {
         /// Delay between requests in milliseconds. No delay precedes the first request.
         #[arg(long, default_value_t = 0, value_parser = clap::value_parser!(u64).range(0..=3_600_000))]
         delay: u64,
+        /// Include requests matching any tag. Repeat or separate tags with commas.
+        #[arg(long, value_delimiter = ',')]
+        tags: Vec<String>,
+        /// Exclude requests matching any tag, including inherited folder tags.
+        #[arg(long, value_delimiter = ',')]
+        exclude_tags: Vec<String>,
         #[command(flatten)]
         network: NetworkArgs,
     },
@@ -234,21 +240,29 @@ fn run(args: Args) -> Result<bool> {
             json,
             bail,
             delay,
+            tags,
+            exclude_tags,
             network,
         } => {
             let root = collection::root(&path)?;
+            let mut entries = collection::discover(&path)?;
+            if entries.is_empty() {
+                return Err(Error::Invalid {
+                    reason: "collection contains no request files".into(),
+                });
+            }
+            entries.retain(|entry| collection::matches_tags(entry, &tags, &exclude_tags));
+            if entries.is_empty() {
+                return Err(Error::Invalid {
+                    reason: "no requests match the tag filters".into(),
+                });
+            }
             let mut values = env.map_or_else(
                 || Ok(Variables::new()),
                 |name| collection::environment(&root, &name),
             )?;
             let overrides: Variables = variables.into_iter().collect();
             values.extend(overrides.clone());
-            let entries = collection::discover(&path)?;
-            if entries.is_empty() {
-                return Err(Error::Invalid {
-                    reason: "collection contains no request files".into(),
-                });
-            }
             let options = network.into_options();
             let engine = Engine::with_network(Duration::from_secs(timeout), &options)?;
             let mut passed = true;

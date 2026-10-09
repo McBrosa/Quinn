@@ -11,6 +11,8 @@ pub struct Entry {
     pub path: PathBuf,
     pub name: String,
     pub sequence: i64,
+    /// Request tags followed by inherited folder tags, without duplicates.
+    pub tags: Vec<String>,
 }
 
 /// Discover request files in a collection without following symbolic links.
@@ -38,7 +40,39 @@ pub fn discover(path: &Path) -> Result<Vec<Entry>> {
     } else {
         walk(path, is_yaml(&root(path)?), &mut entries)?;
     }
+    let root = root(path)?;
+    let root = fs::canonicalize(&root).map_err(|source| Error::io(&root, source))?;
+    for entry in &mut entries {
+        let absolute =
+            fs::canonicalize(&entry.path).map_err(|source| Error::io(&entry.path, source))?;
+        let parent = absolute
+            .parent()
+            .ok_or_else(|| Error::invalid("request has no parent directory"))?;
+        for directory in parent
+            .ancestors()
+            .take_while(|directory| *directory != root)
+        {
+            let metadata = directory.join(if is_yaml(&root) {
+                "folder.yml"
+            } else {
+                "folder.bru"
+            });
+            if metadata.is_file() {
+                for tag in tags(&metadata_document(&metadata)?)? {
+                    if !entry.tags.contains(&tag) {
+                        entry.tags.push(tag);
+                    }
+                }
+            }
+        }
+    }
     Ok(entries)
+}
+
+/// Match any included tag, then reject any excluded tag. Matching is case-sensitive.
+pub fn matches_tags(entry: &Entry, include: &[String], exclude: &[String]) -> bool {
+    (include.is_empty() || entry.tags.iter().any(|tag| include.contains(tag)))
+        && !entry.tags.iter().any(|tag| exclude.contains(tag))
 }
 
 /// Parse a request without changing its original source format.
@@ -406,12 +440,33 @@ fn add_entry(path: &Path, entries: &mut Vec<Entry>) -> Result<()> {
             .into_owned()
     });
     let sequence = sequence(&document, path)?;
+    let tags = tags(&document)?;
     entries.push(Entry {
         path: path.to_owned(),
         name,
         sequence,
+        tags,
     });
     Ok(())
+}
+
+fn tags(document: &Document) -> Result<Vec<String>> {
+    let mut tags = Vec::new();
+    for pair in document.pairs("meta")? {
+        if pair.enabled && pair.key == "tags" && pair.is_list {
+            for tag in pair
+                .value
+                .lines()
+                .map(str::trim)
+                .filter(|tag| !tag.is_empty())
+            {
+                if !tags.iter().any(|existing| existing == tag) {
+                    tags.push(tag.to_owned());
+                }
+            }
+        }
+    }
+    Ok(tags)
 }
 
 fn sequence(document: &Document, path: &Path) -> Result<i64> {

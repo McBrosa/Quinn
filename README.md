@@ -68,6 +68,13 @@ It runs requests sequentially and continues after a failed request by default.
 Use `--bail` to stop after the first failure, including failed tests or variable extraction.
 Use `--delay MILLISECONDS` to pause between request attempts. The accepted range is 0 to 3,600,000.
 The first request has no delay. A stopped run includes only attempted requests in its JSON report.
+
+Use `--tags smoke,api` to run requests with any included tag.
+Use `--exclude-tags wip` to exclude requests with any excluded tag.
+Both flags accept repeated values. Matching is case-sensitive.
+Request tags include tags from all parent folders. Collection-root tags do not inherit, as in Bruno.
+Filters preserve request order and apply before scripts, OAuth, or network preparation.
+If no requests match, Quinn returns an error without sending requests.
 The default timeout is 30 seconds. Use `--timeout SECONDS` to change it.
 
 ## Supported features

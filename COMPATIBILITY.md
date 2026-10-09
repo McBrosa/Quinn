@@ -17,6 +17,15 @@ Discovery uses Bruno's CLI folders-first traversal. Unsequenced folders start in
 Positive folder sequences insert folders at their one-based positions. Equal sequences retain filename order.
 Each folder runs recursively before requests in its parent directory. Requests use numeric `meta.seq`, then filename order.
 Filename comparisons use Unicode lexical order, not a machine-dependent locale.
+
+The CLI supports `--tags` and `--exclude-tags`, with comma-separated or repeated values.
+Requests match any included tag. Any excluded tag overrides inclusion. Matching is case-sensitive.
+`.bru` requests use `meta.tags` lists. YAML requests use `info.tags` arrays.
+Tags inherit from all parent folders, nearest first, without duplicates. Collection-root tags do not inherit.
+Empty tags and non-string YAML tags are ignored. Multiline YAML tags and the tag `]` return errors.
+Filters preserve discovery order and run before environment, network, OAuth, or script preparation.
+An empty selection returns an error. Desktop tag controls and script `req.getTags()` are not implemented.
+
 The desktop keeps the original source until the user edits it.
 
 Forms patch only changed fields and blocks. Untouched entries, comments, scripts,
