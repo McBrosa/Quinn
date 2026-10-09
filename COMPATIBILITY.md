@@ -58,10 +58,14 @@ Atomic saves still reject external file changes. Symlink requests, metadata, and
 
 Supported YAML HTTP fields include methods, URLs, headers, query/path parameters, basic/bearer/Digest/API-key authentication, inherited defaults, and scalar variables.
 Bodies include JSON, text, XML, SPARQL, URL-encoded forms, multipart text/files, and binary files.
+HTTP body variants use the selected entry, or the first entry if none is selected. Empty variants and multiple selections return errors.
+Only the active body is converted. Inactive body payloads do not acquire tokens, interpolate variables, or read upload files.
 Runtime fields include synchronous scripts/tests, assertions, and runtime-scope response-variable actions.
 File-based and embedded environments support scalar variables, disabled entries, and parent inheritance through `extends`.
 
 GraphQL supports query text, JSON-variable text, and selected body variants. The default method is POST.
+GraphQL variables use JSON text, as defined by OpenCollection's schema. Nested JSON objects and arrays retain their values after interpolation.
+YAML mappings or arrays in `graphql.body.variables` and `websocket.message.data` remain unsupported because these schema fields require strings.
 gRPC supports URLs, methods, all four finite method types, `protoFilePath`, metadata, and ordered message blocks.
 WebSocket requests support headers and one selected text or JSON message. They use the existing one-shot exchange.
 GraphQL and WebSocket variants use the selected entry, or the first entry if none is selected. Multiple selected entries return errors.
@@ -73,7 +77,7 @@ Authorization code requires an enabled `pkce` mapping. Missing OAuth settings de
 Manual token acquisition, password/implicit flows, additional OAuth parameters, custom token prefixes, and query-token placement return errors.
 AWS v4 authentication maps explicit credentials, region, and service. Nonempty AWS profile names return errors.
 
-Secret storage, typed variables, inline collection `items`, and HTTP body variants are not supported yet.
+Secret storage, typed variables, and inline collection `items` are not supported yet.
 Unknown executable fields return errors. Custom YAML tags, duplicate mapping keys, non-string mapping keys, and dictionary values with triple quotes also return errors.
 
 Harmless request settings are accepted only at these values: `encodeUrl: true`, `timeout: 0` or null, `followRedirects: true`, `maxRedirects: 10`, `forwardAuthorizationHeader: false`, and empty `omitHeaders`.

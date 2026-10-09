@@ -247,3 +247,220 @@ fn yaml_invalid_graphql_json_and_websocket_messages_fail_before_connect() {
         assert!(!error.contains("connection failed"), "{error}");
     }
 }
+
+#[test]
+fn http_body_variants_select_one_existing_body_type_without_reading_inactive_data() {
+    for (body, mode, block) in [
+        (
+            serde_json::json!({"type":"json", "data":"{\"active\":true}"}),
+            "json",
+            "body:json",
+        ),
+        (
+            serde_json::json!({"type":"text", "data":"active"}),
+            "text",
+            "body:text",
+        ),
+        (
+            serde_json::json!({"type":"xml", "data":"<active/>"}),
+            "xml",
+            "body:xml",
+        ),
+        (
+            serde_json::json!({"type":"sparql", "data":"SELECT * WHERE {?s ?p ?o}"}),
+            "sparql",
+            "body:sparql",
+        ),
+        (
+            serde_json::json!({"type":"form-urlencoded", "data":[{"name":"active", "value":"yes"}]}),
+            "formUrlEncoded",
+            "body:form-urlencoded",
+        ),
+        (
+            serde_json::json!({"type":"multipart-form", "data":[{"name":"active", "type":"text", "value":"yes"}]}),
+            "multipartForm",
+            "body:multipart-form",
+        ),
+        (
+            serde_json::json!({"type":"file", "data":[{"filePath":"active.txt", "selected":true}]}),
+            "file",
+            "body:file",
+        ),
+    ] {
+        let source = serde_yaml_ng::to_string(&serde_json::json!({"http": {
+            "method":"POST", "url":"http://localhost", "body":[
+                {"title":"inactive", "body":{"type":"unsupported", "dangerous":"{{missing}}"}},
+                {"title":"active", "selected":true, "body":body}
+            ]
+        }}))
+        .unwrap();
+        let document = collection::parse(Path::new("request.yml"), &source).unwrap();
+        assert_eq!(
+            document.value("post", "body").unwrap().as_deref(),
+            Some(mode)
+        );
+        assert!(document.block(block).is_some());
+    }
+    let first = collection::parse(Path::new("request.yml"), "http:\n  method: POST\n  body:\n    - title: first\n      body: {type: text, data: first}\n    - title: second\n      body: {type: text, data: second}\n").unwrap();
+    assert_eq!(first.block("body:text").unwrap().content, "first");
+}
+
+#[test]
+fn selected_http_body_runs_in_cli_with_interpolation_and_unchanged_source() {
+    let directory = tempfile::tempdir().unwrap();
+    fs::write(
+        directory.path().join("opencollection.yml"),
+        "opencollection: 1.0.0\n",
+    )
+    .unwrap();
+    let (url, server) = http_server(vec!["{}"]);
+    let source = serde_yaml_ng::to_string(&serde_json::json!({
+        "info":{"type":"http", "name":"Selected JSON"},
+        "http":{"method":"POST", "url":url, "body":[
+            {"title":"inactive upload", "body":{"type":"file", "data":[{"filePath":"does-not-exist", "selected":true}]}},
+            {"title":"active JSON", "selected":true, "body":{"type":"json", "data":"{\"message\":\"{{name}}\",\"active\":true}"}}
+        ]},
+        "runtime":{"variables":[{"name":"name", "value":"Quinn"}]}
+    })).unwrap();
+    let source = format!("# Preserve this source.\n{source}");
+    let path = directory.path().join("request.yml");
+    fs::write(&path, &source).unwrap();
+    let result = Command::new(env!("CARGO_BIN_EXE_quinn"))
+        .args(["run", path.to_str().unwrap(), "--json"])
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "{} {}",
+        String::from_utf8_lossy(&result.stdout),
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let wire = server.join().unwrap().remove(0);
+    assert!(
+        wire.to_ascii_lowercase()
+            .contains("content-type: application/json")
+    );
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(wire.split_once("\r\n\r\n").unwrap().1).unwrap(),
+        serde_json::json!({"message":"Quinn", "active":true})
+    );
+    assert_eq!(collection::read(&path).unwrap(), source);
+}
+
+#[test]
+fn selected_form_multipart_and_file_variants_execute_existing_upload_paths() {
+    let directory = tempfile::tempdir().unwrap();
+    fs::write(directory.path().join("active.txt"), "active file").unwrap();
+    for (body, expected) in [
+        (
+            serde_json::json!({"type":"form-urlencoded", "data":[{"name":"message", "value":"active form"}]}),
+            "message=active+form",
+        ),
+        (
+            serde_json::json!({"type":"multipart-form", "data":[{"name":"message", "type":"text", "value":"active multipart"}]}),
+            "active multipart",
+        ),
+        (
+            serde_json::json!({"type":"file", "data":[{"filePath":"active.txt", "selected":true}]}),
+            "active file",
+        ),
+    ] {
+        let (url, server) = http_server(vec!["{}"]);
+        let source = serde_yaml_ng::to_string(&serde_json::json!({"http": {
+            "method":"POST", "url":url, "body":[
+                {"title":"inactive", "body":{"type":"file", "data":[{"filePath":"missing", "selected":true}]}},
+                {"title":"active", "selected":true, "body":body}
+            ]
+        }})).unwrap();
+        let document = collection::parse(Path::new("request.yml"), &source).unwrap();
+        assert!(
+            Engine::new(Duration::from_secs(5))
+                .unwrap()
+                .send_in(&document, &[], &Variables::new(), directory.path())
+                .unwrap()
+                .passed()
+        );
+        let wire = server.join().unwrap().remove(0);
+        assert!(
+            wire.split_once("\r\n\r\n").unwrap().1.contains(expected),
+            "{wire}"
+        );
+    }
+}
+
+#[test]
+fn graphql_json_variable_text_keeps_interpolation_nested_objects_arrays_and_nulls() {
+    let (url, server) = http_server(vec!["{}"]);
+    let source = serde_yaml_ng::to_string(&serde_json::json!({"graphql":{
+        "url":url, "body":{"query":"query User($id: Int!) { user(id: $id) { id } }", "variables":r#"{"id":{{id}},"name":"{{name}}","list":[1,null,{"flag":true}]}"#}
+    }})).unwrap();
+    let document = collection::parse(Path::new("request.yml"), &source).unwrap();
+    let variables = Variables::from([("id".into(), "42".into()), ("name".into(), "Quinn".into())]);
+    assert!(
+        Engine::new(Duration::from_secs(5))
+            .unwrap()
+            .send(&document, &[], &variables)
+            .unwrap()
+            .passed()
+    );
+    let wire = server.join().unwrap().remove(0);
+    let body: serde_json::Value =
+        serde_json::from_str(wire.split_once("\r\n\r\n").unwrap().1).unwrap();
+    assert_eq!(
+        body["variables"],
+        serde_json::json!({"id":42,"name":"Quinn","list":[1,null,{"flag":true}]})
+    );
+    for variables in [
+        serde_json::json!({"id":42}),
+        serde_json::json!([1, 2]),
+        serde_json::json!(42),
+        serde_json::json!(true),
+        serde_json::Value::Null,
+    ] {
+        let source = serde_yaml_ng::to_string(
+            &serde_json::json!({"graphql":{"body":{"variables":variables}}}),
+        )
+        .unwrap();
+        assert!(collection::parse(Path::new("request.yml"), &source).is_err());
+    }
+}
+
+#[test]
+fn invalid_selected_http_variants_fail_before_cli_network_and_oauth() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let directory = tempfile::tempdir().unwrap();
+    fs::write(
+        directory.path().join("opencollection.yml"),
+        "opencollection: 1.0.0\n",
+    )
+    .unwrap();
+    for body in [
+        serde_json::json!([]),
+        serde_json::json!([{"title":"one", "selected":true, "body":{"type":"text","data":"one"}}, {"title":"two", "selected":true, "body":{"type":"text","data":"two"}}]),
+        serde_json::json!([{"title":"bad", "selected":"true", "body":{"type":"text","data":"one"}}]),
+        serde_json::json!([{"title":"bad", "selected":true}]),
+        serde_json::json!([{"title":"bad", "body":{"type":"execute","data":"dangerous"}}]),
+        serde_json::json!([{"title":"bad", "body":{"type":"json","data":"{}","execute":"dangerous"}}]),
+        serde_json::json!([{"title":"bad", "selected":true, "body":{"type":"json","data":"invalid"}}]),
+        serde_json::json!([{"title":"bad", "selected":true, "body":{"type":"text","data":"{{missing}}"}}]),
+        serde_json::json!([{"title":"bad", "selected":true, "body":{"type":"file","data":[{"filePath":"missing","selected":true}]}}]),
+    ] {
+        let source = serde_yaml_ng::to_string(&serde_json::json!({"http": {
+            "method":"POST", "url":url, "body":body,
+            "auth":{"type":"oauth2", "flow":"client_credentials", "accessTokenUrl":format!("{url}/token"), "credentials":{"clientId":"client", "clientSecret":"secret"}}
+        }})).unwrap();
+        let path = directory.path().join("request.yml");
+        fs::write(&path, source).unwrap();
+        let result = Command::new(env!("CARGO_BIN_EXE_quinn"))
+            .args(["run", path.to_str().unwrap(), "--json"])
+            .output()
+            .unwrap();
+        assert!(!result.status.success());
+        assert_eq!(
+            listener.accept().unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock
+        );
+    }
+}

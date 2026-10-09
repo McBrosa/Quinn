@@ -120,7 +120,7 @@ pub(crate) fn parse(source: &str, collection: bool, folder: bool) -> Result<Docu
                     graphql_body(&mut document, body)?;
                     "graphql".into()
                 } else {
-                    body_blocks(&mut document, body)?
+                    body_blocks(&mut document, selected(body, "body")?)?
                 };
             }
             let auth = authentication(&mut document, http.get("auth"))?;
@@ -663,7 +663,10 @@ fn graphql_body(document: &mut Document, value: &Value) -> Result<()> {
     keys(value, &["query", "variables"])?;
     raw(document, "body:graphql", text(value, "query", "")?);
     if let Some(variables) = value.get("variables") {
-        raw(document, "body:graphql:vars", scalar(variables)?);
+        let variables = variables
+            .as_str()
+            .ok_or_else(|| Error::invalid("OpenCollection GraphQL variables must be JSON text"))?;
+        raw(document, "body:graphql:vars", variables.to_owned());
     }
     Ok(())
 }
@@ -777,7 +780,9 @@ fn body_blocks(document: &mut Document, value: &Value) -> Result<String> {
         "json" | "text" | "xml" | "sparql" => {
             raw(document, &format!("body:{kind}"), text(value, "data", "")?)
         }
-        "form-urlencoded" => list_pairs(document, "body:formUrlEncoded", value.get("data"), false)?,
+        "form-urlencoded" => {
+            list_pairs(document, "body:form-urlencoded", value.get("data"), false)?
+        }
         "multipart-form" | "file" => {
             let data = value
                 .get("data")
@@ -855,7 +860,7 @@ fn body_blocks(document: &mut Document, value: &Value) -> Result<String> {
                 if kind == "file" {
                     "body:file"
                 } else {
-                    "body:multipartForm"
+                    "body:multipart-form"
                 },
                 pairs,
             )?;

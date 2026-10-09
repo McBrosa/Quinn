@@ -270,7 +270,7 @@ fn yaml_bodies_disabled_fields_and_api_key_convert_without_source_rewrites() {
             .as_deref(),
         Some("queryparams")
     );
-    let pairs = document.pairs("body:multipartForm").unwrap();
+    let pairs = document.pairs("body:multipart-form").unwrap();
     assert_eq!(
         pairs[0].value,
         "@file(one.bin|two.bin) @contentType(application/octet-stream)"
@@ -278,7 +278,7 @@ fn yaml_bodies_disabled_fields_and_api_key_convert_without_source_rewrites() {
     assert!(!pairs[2].enabled);
     let form = collection::parse(path, "http:\n  method: POST\n  url: http://localhost\n  body:\n    type: form-urlencoded\n    data: [{name: field, value: a b}]\n").unwrap();
     assert_eq!(
-        form.value("body:formUrlEncoded", "field")
+        form.value("body:form-urlencoded", "field")
             .unwrap()
             .as_deref(),
         Some("a b")
