@@ -28,41 +28,97 @@ fn request(url: &str) -> Document {
 }
 
 fn http_server(reply: &'static str) -> (String, thread::JoinHandle<String>) {
+    http_server_replies(vec![reply])
+}
+
+fn http_server_replies(replies: Vec<&'static str>) -> (String, thread::JoinHandle<String>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
     listener.set_nonblocking(true).unwrap();
     let handle = thread::spawn(move || {
-        let deadline = Instant::now() + Duration::from_secs(5);
-        let mut socket = loop {
-            match listener.accept() {
-                Ok((socket, _)) => break socket,
-                Err(error)
-                    if error.kind() == std::io::ErrorKind::WouldBlock
-                        && Instant::now() < deadline =>
-                {
-                    thread::sleep(Duration::from_millis(10))
+        let mut requests = Vec::new();
+        for reply in replies {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            let mut socket = loop {
+                match listener.accept() {
+                    Ok((socket, _)) => break socket,
+                    Err(error)
+                        if error.kind() == std::io::ErrorKind::WouldBlock
+                            && Instant::now() < deadline =>
+                    {
+                        thread::sleep(Duration::from_millis(10))
+                    }
+                    Err(error) => panic!("cannot accept test request: {error}"),
                 }
-                Err(error) => panic!("cannot accept test request: {error}"),
+            };
+            socket.set_nonblocking(false).unwrap();
+            socket
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            socket
+                .set_write_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut bytes = Vec::new();
+            let mut byte = [0];
+            while !bytes.ends_with(b"\r\n\r\n") {
+                socket.read_exact(&mut byte).unwrap();
+                bytes.push(byte[0]);
+                assert!(bytes.len() < 65536);
             }
-        };
-        socket.set_nonblocking(false).unwrap();
-        socket
-            .set_read_timeout(Some(Duration::from_secs(5)))
-            .unwrap();
-        socket
-            .set_write_timeout(Some(Duration::from_secs(5)))
-            .unwrap();
-        let mut bytes = Vec::new();
-        let mut byte = [0];
-        while !bytes.ends_with(b"\r\n\r\n") {
-            socket.read_exact(&mut byte).unwrap();
-            bytes.push(byte[0]);
-            assert!(bytes.len() < 65536);
+            let body_length = String::from_utf8_lossy(&bytes)
+                .lines()
+                .find_map(|line| {
+                    line.to_lowercase()
+                        .strip_prefix("content-length: ")
+                        .and_then(|value| value.parse::<usize>().ok())
+                })
+                .unwrap_or(0);
+            assert!(body_length <= 1024 * 1024);
+            let header_length = bytes.len();
+            bytes.resize(header_length + body_length, 0);
+            socket.read_exact(&mut bytes[header_length..]).unwrap();
+            socket.write_all(reply.as_bytes()).unwrap();
+            requests.push(String::from_utf8(bytes).unwrap());
         }
-        socket.write_all(reply.as_bytes()).unwrap();
-        String::from_utf8(bytes).unwrap()
+        requests.join("\n")
     });
     (url, handle)
+}
+
+#[test]
+fn oauth_token_acquisition_and_api_request_share_explicit_proxy_configuration() {
+    let token = r#"{"access_token":"network-test","token_type":"Bearer"}"#;
+    // This fixed reply deliberately has no expiry, so it is not cached.
+    let token_reply = format!(
+        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{token}",
+        token.len()
+    );
+    let token_reply: &'static str = Box::leak(token_reply.into_boxed_str());
+    let (proxy, server) = http_server_replies(vec![
+        token_reply,
+        "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}",
+    ]);
+    let request = Document::parse(
+        "get {\n  url: http://example.invalid/api\n  auth: oauth2\n}\nauth:oauth2 {\n  grant_type: client_credentials\n  access_token_url: http://example.invalid/token\n  client_id: test\n  client_secret: secret\n}\n",
+    ).unwrap();
+    let engine = Engine::with_network(
+        Duration::from_secs(3),
+        &NetworkOptions {
+            proxy: Some(proxy),
+            ..NetworkOptions::default()
+        },
+    )
+    .unwrap();
+    assert!(
+        engine
+            .send(&request, &[], &Variables::new())
+            .unwrap()
+            .passed()
+    );
+    let wire = server.join().unwrap();
+    assert!(wire.contains("POST http://example.invalid/token HTTP/1.1"));
+    assert!(wire.contains("GET http://example.invalid/api HTTP/1.1"));
+    assert!(wire.contains("authorization: Bearer network-test"));
 }
 
 #[test]
