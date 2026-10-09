@@ -53,6 +53,12 @@ enum Command {
         /// Write a JSON report to stdout.
         #[arg(long)]
         json: bool,
+        /// Stop after the first failed request, assertion, script, or extraction.
+        #[arg(long)]
+        bail: bool,
+        /// Delay between requests in milliseconds. No delay precedes the first request.
+        #[arg(long, default_value_t = 0, value_parser = clap::value_parser!(u64).range(0..=3_600_000))]
+        delay: u64,
         #[command(flatten)]
         network: NetworkArgs,
     },
@@ -191,6 +197,8 @@ fn run(args: Args) -> Result<bool> {
             variables,
             timeout,
             json,
+            bail,
+            delay,
             network,
         } => {
             let root = collection::root(&path)?;
@@ -210,7 +218,10 @@ fn run(args: Args) -> Result<bool> {
             let engine = Engine::with_network(Duration::from_secs(timeout), &options)?;
             let mut passed = true;
             let mut report = Vec::new();
-            for entry in entries {
+            for (index, entry) in entries.into_iter().enumerate() {
+                if index > 0 && delay > 0 {
+                    std::thread::sleep(Duration::from_millis(delay));
+                }
                 let result = (|| {
                     let document = Document::parse(&collection::read(&entry.path)?)?;
                     let defaults = collection::defaults(&root, &entry.path)?;
@@ -255,6 +266,9 @@ fn run(args: Args) -> Result<bool> {
                             eprintln!("FAIL {}: {error}", entry.path.display());
                         }
                     }
+                }
+                if bail && !passed {
+                    break;
                 }
             }
             if json {

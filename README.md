@@ -63,7 +63,10 @@ quinn run examples/starter --env Local
 ```
 
 `quinn run` returns exit code `1` for HTTP errors, failed assertions, or request errors.
-It runs requests sequentially and continues after a failed request.
+It runs requests sequentially and continues after a failed request by default.
+Use `--bail` to stop after the first failure, including failed tests or variable extraction.
+Use `--delay MILLISECONDS` to pause between request attempts. The accepted range is 0 to 3,600,000.
+The first request has no delay. A stopped run includes only attempted requests in its JSON report.
 The default timeout is 30 seconds. Use `--timeout SECONDS` to change it.
 
 ## Supported features
