@@ -1,0 +1,12 @@
+Quinn is an independent Rust reimplementation of a subset of Bruno's API client.
+
+Upstream: https://github.com/usebruno/bruno
+Reference commit: 43b7c0fb2c66904aeedc6add3676b3a44d62d000
+Reference date: 2026-10-09
+
+The Bruno v2 grammar and fixtures informed Quinn's .bru parser and request model.
+Bruno is copyright (c) 2022 Anoop M D, Anusree P S and Contributors, under MIT.
+The upstream copyright and permission notice are preserved in LICENSE.
+
+Quinn does not include Bruno's logos, commercial features, or Electron runtime.
+Quinn is not affiliated with or endorsed by the Bruno project.

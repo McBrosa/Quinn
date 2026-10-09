@@ -1,0 +1,6 @@
+/target/
+/.serena/
+/.impeccable/review/
+.DS_Store
+*.log
+.env
