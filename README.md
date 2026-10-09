@@ -1,7 +1,7 @@
 # Quinn
 
 Quinn is a native Rust API client with a desktop app and CLI.
-It reads local Bruno `.bru` collections and OpenCollection YAML HTTP collections.
+It reads local Bruno `.bru` collections and OpenCollection YAML collections.
 It sends REST, GraphQL, unary and finite streaming gRPC, and one-shot WebSocket requests.
 Collections stay on your filesystem and work with Git.
 
@@ -105,7 +105,7 @@ The default timeout is 30 seconds. Use `--timeout SECONDS` to change it.
 - Response bodies, headers, timing, byte counts, and JSON reports.
 - Unary and finite streaming gRPC with local protobuf files or server reflection.
 - One-shot text WebSocket send/receive.
-- OpenCollection YAML HTTP requests with source-preserving editing and folder ordering.
+- OpenCollection YAML HTTP, GraphQL, gRPC, and one-shot WebSocket requests with source-preserving editing and folder ordering.
 - HTTP/OAuth proxy, custom CA, and mutual TLS configuration with certificate verification enabled.
 - Offline Postman v2.1, OpenAPI 3 JSON/YAML, Insomnia v4 JSON, and cURL imports.
 - Offline Postman v2.1 and OpenAPI 3 JSON exports for supported HTTP requests.

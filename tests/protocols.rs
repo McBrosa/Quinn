@@ -274,6 +274,37 @@ fn grpc_request(url: &str) -> Document {
 }
 
 #[test]
+fn yaml_grpc_executes_canonical_metadata_and_message_on_local_server() {
+    let (url, server) = grpc_server("0");
+    let request = quinn_api::collection::parse(Path::new("request.yml"), &format!("info: {{type: grpc}}\ngrpc:\n  url: '{url}'\n  method: /quinn.test.EchoService/EchoMessage\n  methodType: unary\n  protoFilePath: echo.proto\n  metadata:\n    - {{name: x-user, value: '{{{{name}}}}'}}\n    - {{name: data-bin, value: hello}}\n  message: '{{\"text\":\"hello {{{{name}}}}\"}}'\n")).unwrap();
+    let values = Variables::from([("name".into(), "Quinn".into())]);
+    let response = engine(Duration::from_secs(5))
+        .send_in(&request, &[], &values, &fixtures())
+        .unwrap();
+    assert!(response.passed());
+    assert_eq!(response.headers["grpc-status"], "0");
+    assert_eq!(
+        serde_json::from_str::<Value>(&response.body).unwrap()["text"],
+        "hello Quinn"
+    );
+    server.join().unwrap();
+}
+
+#[test]
+fn yaml_websocket_selected_message_executes_with_inherited_auth() {
+    let (url, server) = websocket_server(false);
+    let request = quinn_api::collection::parse(Path::new("request.yml"), &format!("info: {{type: websocket}}\nwebsocket:\n  url: '{url}?token=a%26b'\n  auth: inherit\n  message:\n    - title: unused\n      message: {{type: text, data: unused}}\n    - title: selected\n      selected: true\n      message: {{type: text, data: 'hello {{{{name}}}}'}}\n")).unwrap();
+    let defaults = Document::parse("auth {\n  mode: bearer\n}\nauth:bearer {\n  token: test-token\n}\nheaders {\n  x-test: inherited\n}\n").unwrap();
+    let values = Variables::from([("name".into(), "Quinn".into())]);
+    let response = engine(Duration::from_secs(5))
+        .send(&request, &[defaults], &values)
+        .unwrap();
+    assert!(response.passed());
+    assert_eq!(response.status, 101);
+    server.join().unwrap();
+}
+
+#[test]
 fn grpc_compiles_bruno_protos_and_runs_unary_without_protoc() {
     let (url, server) = grpc_server("0");
     let mut request = grpc_request(&url);

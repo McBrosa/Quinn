@@ -24,16 +24,20 @@ pub(crate) fn parse(source: &str, collection: bool, folder: bool) -> Result<Docu
         } else if folder {
             &["info", "request", "docs"]
         } else {
-            &["info", "http", "runtime", "settings", "docs", "examples"]
+            &[
+                "info",
+                "http",
+                "graphql",
+                "grpc",
+                "websocket",
+                "runtime",
+                "settings",
+                "docs",
+                "examples",
+            ]
         },
     )?;
     let mut document = metadata_value(object)?;
-    if let Some(info) = object.get("info") {
-        let info = self::object(info, "info")?;
-        if !collection && !folder && info.get("type").is_some_and(|v| v != "http") {
-            return unsupported("request type other than HTTP");
-        }
-    }
     if collection {
         if object.get("opencollection").and_then(Value::as_str) != Some("1.0.0") {
             return unsupported("OpenCollection version other than 1.0.0");
@@ -63,63 +67,99 @@ pub(crate) fn parse(source: &str, collection: bool, folder: bool) -> Result<Docu
             defaults(&mut document, request)?;
         }
     } else {
-        let http = self::object(
-            object
-                .get("http")
-                .ok_or_else(|| Error::invalid("OpenCollection request has no http field"))?,
-            "http",
-        )?;
-        keys(
-            http,
-            &["method", "url", "headers", "params", "auth", "body"],
-        )?;
-        let method = text(http, "method", "GET")?.to_lowercase();
-        if !matches!(
-            method.as_str(),
-            "get" | "post" | "put" | "patch" | "delete" | "options" | "head" | "trace" | "connect"
-        ) {
-            return unsupported("HTTP method");
+        let kinds: Vec<_> = ["http", "graphql", "grpc", "websocket"]
+            .into_iter()
+            .filter(|kind| object.contains_key(*kind))
+            .collect();
+        if kinds.len() != 1 {
+            return Err(Error::invalid(
+                "OpenCollection requests require exactly one protocol field",
+            ));
         }
-        let mut mode = "none".to_owned();
-        if let Some(body) = http.get("body") {
-            mode = body_blocks(&mut document, body)?;
+        let kind = kinds[0];
+        if object
+            .get("info")
+            .and_then(|info| info.get("type"))
+            .is_some_and(|value| value != kind)
+        {
+            return Err(Error::invalid(
+                "OpenCollection info.type does not match the protocol field",
+            ));
         }
-        let auth = authentication(&mut document, http.get("auth"))?;
-        dictionary(
-            &mut document,
-            &method,
-            vec![
-                ("url".into(), text(http, "url", "")?, true),
-                ("body".into(), mode, true),
-                ("auth".into(), auth, true),
-            ],
-        )?;
-        list_pairs(&mut document, "headers", http.get("headers"), false)?;
-        if let Some(params) = http.get("params") {
-            for kind in ["query", "path"] {
-                let entries = array(params, "params")?
-                    .iter()
-                    .filter(|value| {
-                        value.get("type").and_then(Value::as_str).unwrap_or("query") == kind
-                    })
-                    .cloned()
-                    .collect();
-                list_pairs(
-                    &mut document,
-                    &format!("params:{kind}"),
-                    Some(&Value::Array(entries)),
-                    true,
-                )?;
+        if matches!(kind, "grpc" | "websocket") {
+            protocol_blocks(&mut document, kind, &object[kind])?;
+        } else {
+            let http = self::object(&object[kind], kind)?;
+            keys(
+                http,
+                &["method", "url", "headers", "params", "auth", "body"],
+            )?;
+            let method = text(
+                http,
+                "method",
+                if kind == "graphql" { "POST" } else { "GET" },
+            )?
+            .to_lowercase();
+            if !matches!(
+                method.as_str(),
+                "get"
+                    | "post"
+                    | "put"
+                    | "patch"
+                    | "delete"
+                    | "options"
+                    | "head"
+                    | "trace"
+                    | "connect"
+            ) {
+                return unsupported("HTTP method");
             }
-            for parameter in array(params, "params")? {
-                if !matches!(
-                    parameter
-                        .get("type")
-                        .and_then(Value::as_str)
-                        .unwrap_or("query"),
-                    "query" | "path"
-                ) {
-                    return unsupported("parameter type");
+            let mut mode = "none".to_owned();
+            if let Some(body) = http.get("body") {
+                mode = if kind == "graphql" {
+                    graphql_body(&mut document, body)?;
+                    "graphql".into()
+                } else {
+                    body_blocks(&mut document, body)?
+                };
+            }
+            let auth = authentication(&mut document, http.get("auth"))?;
+            dictionary(
+                &mut document,
+                &method,
+                vec![
+                    ("url".into(), text(http, "url", "")?, true),
+                    ("body".into(), mode, true),
+                    ("auth".into(), auth, true),
+                ],
+            )?;
+            list_pairs(&mut document, "headers", http.get("headers"), false)?;
+            if let Some(params) = http.get("params") {
+                for kind in ["query", "path"] {
+                    let entries = array(params, "params")?
+                        .iter()
+                        .filter(|value| {
+                            value.get("type").and_then(Value::as_str).unwrap_or("query") == kind
+                        })
+                        .cloned()
+                        .collect();
+                    list_pairs(
+                        &mut document,
+                        &format!("params:{kind}"),
+                        Some(&Value::Array(entries)),
+                        true,
+                    )?;
+                }
+                for parameter in array(params, "params")? {
+                    if !matches!(
+                        parameter
+                            .get("type")
+                            .and_then(Value::as_str)
+                            .unwrap_or("query"),
+                        "query" | "path"
+                    ) {
+                        return unsupported("parameter type");
+                    }
                 }
             }
         }
@@ -445,10 +485,22 @@ fn authentication(document: &mut Document, value: Option<&Value>) -> Result<Stri
     }
     let value = object(value, "authentication")?;
     let kind = text(value, "type", "")?;
+    if kind == "oauth2" {
+        oauth_blocks(document, value)?;
+        return Ok(kind);
+    }
     let fields: &[&str] = match kind.as_str() {
-        "basic" => &["username", "password"],
+        "basic" | "digest" => &["username", "password"],
         "bearer" => &["token"],
         "apikey" => &["key", "value", "placement"],
+        "awsv4" => &[
+            "accessKeyId",
+            "secretAccessKey",
+            "sessionToken",
+            "region",
+            "service",
+            "profileName",
+        ],
         _ => return unsupported("authentication type"),
     };
     let mut allowed = fields.to_vec();
@@ -457,6 +509,9 @@ fn authentication(document: &mut Document, value: Option<&Value>) -> Result<Stri
     let mut pairs = Vec::new();
     for field in fields {
         let mut content = text(value, field, "")?;
+        if kind == "awsv4" && *field == "profileName" && !content.is_empty() {
+            return unsupported("AWS credential profiles");
+        }
         if kind == "apikey" && *field == "placement" {
             content = match content.as_str() {
                 "query" => "queryparams".into(),
@@ -468,6 +523,250 @@ fn authentication(document: &mut Document, value: Option<&Value>) -> Result<Stri
     }
     dictionary(document, &format!("auth:{kind}"), pairs)?;
     Ok(kind)
+}
+
+fn oauth_blocks(document: &mut Document, value: &Map<String, Value>) -> Result<()> {
+    keys(
+        value,
+        &[
+            "type",
+            "flow",
+            "accessTokenUrl",
+            "refreshTokenUrl",
+            "authorizationUrl",
+            "callbackUrl",
+            "credentials",
+            "scope",
+            "pkce",
+            "tokenConfig",
+            "settings",
+        ],
+    )?;
+    let flow = text(value, "flow", "client_credentials")?;
+    if !matches!(flow.as_str(), "client_credentials" | "authorization_code") {
+        return unsupported("OAuth flow");
+    }
+    let mut pairs = vec![("grant_type".into(), flow.clone(), true)];
+    for (source, target) in [
+        ("accessTokenUrl", "access_token_url"),
+        ("refreshTokenUrl", "refresh_token_url"),
+        ("authorizationUrl", "authorization_url"),
+        ("callbackUrl", "callback_url"),
+        ("scope", "scope"),
+    ] {
+        if let Some(value) = value.get(source) {
+            pairs.push((target.into(), scalar(value)?, true));
+        }
+    }
+    if let Some(credentials) = value.get("credentials") {
+        let credentials = object(credentials, "OAuth credentials")?;
+        keys(credentials, &["clientId", "clientSecret", "placement"])?;
+        for (source, target) in [("clientId", "client_id"), ("clientSecret", "client_secret")] {
+            pairs.push((target.into(), text(credentials, source, "")?, true));
+        }
+        let placement = match text(credentials, "placement", "body")?.as_str() {
+            "body" => "body",
+            "basic_auth_header" => "header",
+            _ => return unsupported("OAuth credential placement"),
+        };
+        pairs.push(("credentials_placement".into(), placement.into(), true));
+    }
+    if flow == "authorization_code" {
+        let pkce = value.get("pkce").ok_or_else(|| {
+            Error::invalid("OpenCollection authorization code requires PKCE S256")
+        })?;
+        let pkce = object(pkce, "OAuth PKCE")?;
+        keys(pkce, &["disabled", "method"])?;
+        if !enabled(pkce)? || text(pkce, "method", "S256")? != "S256" {
+            return unsupported("OAuth authorization code without PKCE S256");
+        }
+        pairs.push(("pkce".into(), "true".into(), true));
+    } else if value.contains_key("pkce") {
+        return unsupported("PKCE outside authorization code");
+    }
+    if let Some(config) = value.get("tokenConfig") {
+        let config = object(config, "OAuth token configuration")?;
+        keys(config, &["id", "placement", "source"])?;
+        if text(config, "source", "access_token")? != "access_token" {
+            return unsupported("OAuth token source other than access_token");
+        }
+        // The ID labels the in-memory credential set; it does not change token placement.
+        if let Some(id) = config.get("id") {
+            scalar(id)?;
+        }
+        if let Some(placement) = config.get("placement") {
+            let placement = object(placement, "OAuth token placement")?;
+            keys(placement, &["header"])?;
+            let prefix = text(placement, "header", "Bearer")?;
+            if !prefix.eq_ignore_ascii_case("Bearer") {
+                return unsupported("OAuth token prefix other than Bearer");
+            }
+            pairs.push(("token_header_prefix".into(), prefix, true));
+        }
+    }
+    let settings = value
+        .get("settings")
+        .map(|value| object(value, "OAuth settings"))
+        .transpose()?;
+    if let Some(settings) = settings {
+        keys(settings, &["autoFetchToken", "autoRefreshToken"])?;
+    }
+    for (source, target) in [
+        ("autoFetchToken", "auto_fetch_token"),
+        ("autoRefreshToken", "auto_refresh_token"),
+    ] {
+        let setting = settings
+            .and_then(|settings| settings.get(source))
+            .unwrap_or(&Value::Bool(true));
+        let setting = setting
+            .as_bool()
+            .ok_or_else(|| Error::invalid("OpenCollection OAuth settings must be boolean"))?;
+        if source == "autoFetchToken" && !setting {
+            return unsupported("OAuth manual token acquisition");
+        }
+        pairs.push((target.into(), setting.to_string(), true));
+    }
+    dictionary(document, "auth:oauth2", pairs)
+}
+
+fn selected<'v>(value: &'v Value, payload: &str) -> Result<&'v Value> {
+    if let Value::Array(variants) = value {
+        if variants.is_empty() {
+            return Err(Error::invalid("OpenCollection variants must not be empty"));
+        }
+        let mut selected = None;
+        for variant in variants {
+            let variant = object(variant, "variant")?;
+            keys(variant, &["title", "selected", payload])?;
+            match variant.get("selected") {
+                None | Some(Value::Bool(false)) => {}
+                Some(Value::Bool(true)) if selected.is_none() => selected = Some(variant),
+                Some(Value::Bool(true)) => {
+                    return Err(Error::invalid(
+                        "OpenCollection variants require at most one selected entry",
+                    ));
+                }
+                _ => return Err(Error::invalid("OpenCollection selected must be boolean")),
+            }
+            if !variant.contains_key(payload) {
+                return Err(Error::invalid("OpenCollection variant has no payload"));
+            }
+        }
+        Ok(&selected.unwrap_or(object(&variants[0], "variant")?)[payload])
+    } else {
+        Ok(value)
+    }
+}
+
+fn graphql_body(document: &mut Document, value: &Value) -> Result<()> {
+    let value = object(selected(value, "body")?, "GraphQL body")?;
+    keys(value, &["query", "variables"])?;
+    raw(document, "body:graphql", text(value, "query", "")?);
+    if let Some(variables) = value.get("variables") {
+        raw(document, "body:graphql:vars", scalar(variables)?);
+    }
+    Ok(())
+}
+
+fn protocol_blocks(document: &mut Document, kind: &str, value: &Value) -> Result<()> {
+    let value = object(value, kind)?;
+    keys(
+        value,
+        if kind == "grpc" {
+            &[
+                "url",
+                "method",
+                "methodType",
+                "protoFilePath",
+                "metadata",
+                "auth",
+                "message",
+            ]
+        } else {
+            &["url", "headers", "auth", "message"]
+        },
+    )?;
+    let auth = authentication(document, value.get("auth"))?;
+    let protocol = if kind == "grpc" { "grpc" } else { "ws" };
+    let mut pairs = vec![
+        ("url".into(), text(value, "url", "")?, true),
+        ("auth".into(), auth, true),
+        (
+            "body".into(),
+            if value.contains_key("message") {
+                protocol.into()
+            } else {
+                "none".into()
+            },
+            true,
+        ),
+    ];
+    if kind == "grpc" {
+        for (source, target) in [
+            ("method", "method"),
+            ("methodType", "methodType"),
+            ("protoFilePath", "protoPath"),
+        ] {
+            if let Some(value) = value.get(source) {
+                pairs.push((target.into(), scalar(value)?, true));
+            }
+        }
+        list_pairs(document, "metadata", value.get("metadata"), false)?;
+        if let Some(messages) = value.get("message") {
+            if let Value::Array(messages) = messages {
+                if messages.is_empty() || messages.len() > 1024 {
+                    return Err(Error::invalid(
+                        "OpenCollection gRPC requires 1 to 1024 messages",
+                    ));
+                }
+                for (index, message) in messages.iter().enumerate() {
+                    let message = object(message, "gRPC message")?;
+                    keys(message, &["title", "message"])?;
+                    dictionary(
+                        document,
+                        "body:grpc",
+                        vec![
+                            (
+                                "name".into(),
+                                text(message, "title", &format!("message {}", index + 1))?,
+                                true,
+                            ),
+                            ("content".into(), text(message, "message", "")?, true),
+                        ],
+                    )?;
+                }
+            } else {
+                dictionary(
+                    document,
+                    "body:grpc",
+                    vec![
+                        ("name".into(), "message 1".into(), true),
+                        ("content".into(), scalar(messages)?, true),
+                    ],
+                )?;
+            }
+        }
+    } else {
+        list_pairs(document, "headers", value.get("headers"), false)?;
+        if let Some(message) = value.get("message") {
+            let message = object(selected(message, "message")?, "WebSocket message")?;
+            keys(message, &["type", "data"])?;
+            let kind = text(message, "type", "json")?;
+            if !matches!(kind.as_str(), "text" | "json") {
+                return unsupported("WebSocket message type");
+            }
+            dictionary(
+                document,
+                "body:ws",
+                vec![
+                    ("name".into(), "message 1".into(), true),
+                    ("type".into(), kind, true),
+                    ("content".into(), text(message, "data", "")?, true),
+                ],
+            )?;
+        }
+    }
+    dictionary(document, protocol, pairs)
 }
 
 fn body_blocks(document: &mut Document, value: &Value) -> Result<String> {

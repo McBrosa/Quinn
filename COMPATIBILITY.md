@@ -56,12 +56,24 @@ Discovery validates YAML syntax and request metadata. Save validates YAML syntax
 Unsupported requests remain available for Source editing. Send, Run, and export validate the full execution model.
 Atomic saves still reject external file changes. Symlink requests, metadata, and environments are not followed.
 
-Supported YAML HTTP fields include methods, URLs, headers, query/path parameters, basic/bearer/API-key authentication, inherited defaults, and scalar variables.
+Supported YAML HTTP fields include methods, URLs, headers, query/path parameters, basic/bearer/Digest/API-key authentication, inherited defaults, and scalar variables.
 Bodies include JSON, text, XML, SPARQL, URL-encoded forms, multipart text/files, and binary files.
 Runtime fields include synchronous scripts/tests, assertions, and runtime-scope response-variable actions.
 File-based and embedded environments support scalar variables, disabled entries, and parent inheritance through `extends`.
 
-Secret storage, typed variables, YAML GraphQL/gRPC/WebSocket requests, inline collection `items`, body variants, and OAuth authentication are not supported yet.
+GraphQL supports query text, JSON-variable text, and selected body variants. The default method is POST.
+gRPC supports URLs, methods, all four finite method types, `protoFilePath`, metadata, and ordered message blocks.
+WebSocket requests support headers and one selected text or JSON message. They use the existing one-shot exchange.
+GraphQL and WebSocket variants use the selected entry, or the first entry if none is selected. Multiple selected entries return errors.
+These formats use the same protocol limits as `.bru` requests. Protocol scripts and OAuth for gRPC/WebSocket remain unsupported.
+
+YAML OAuth2 supports client credentials and authorization code with PKCE S256, including inherited authentication and refresh configuration.
+Credential placement supports `body` and `basic_auth_header`. Token placement supports only a Bearer header with the `access_token` source.
+Authorization code requires an enabled `pkce` mapping. Missing OAuth settings default automatic acquisition and refresh to true, as Bruno's converter does.
+Manual token acquisition, password/implicit flows, additional OAuth parameters, custom token prefixes, and query-token placement return errors.
+AWS v4 authentication maps explicit credentials, region, and service. Nonempty AWS profile names return errors.
+
+Secret storage, typed variables, inline collection `items`, and HTTP body variants are not supported yet.
 Unknown executable fields return errors. Custom YAML tags, duplicate mapping keys, non-string mapping keys, and dictionary values with triple quotes also return errors.
 
 Harmless request settings are accepted only at these values: `encodeUrl: true`, `timeout: 0` or null, `followRedirects: true`, `maxRedirects: 10`, `forwardAuthorizationHeader: false`, and empty `omitHeaders`.
@@ -582,7 +594,7 @@ Custom configuration for gRPC and WebSockets, per-host certificates, and desktop
 | Multipart requests and binary uploads | Streamed file uploads. Custom boundaries remain unfinished. |
 | gRPC and WebSockets | Unary and finite streaming RPCs with local protobuf files or server reflection, plus one-shot WebSocket exchange. Interactive sessions remain unfinished. |
 | OpenAPI, Postman, Insomnia, and cURL import/export | Offline Postman v2.1, OpenAPI 3 JSON/YAML, Insomnia v4 JSON, and cURL imports. Supported HTTP subsets export to Postman v2.1 and OpenAPI 3 JSON. |
-| Bruno YAML collections | OpenCollection 1.0.0 HTTP subset; protocol-specific YAML, secret storage, and typed variables remain unfinished. |
+| Bruno YAML collections | OpenCollection 1.0.0 HTTP, GraphQL, finite gRPC, and one-shot WebSocket subsets. OAuth2 and explicit AWS v4 map to existing engines. Secret storage and typed variables remain unfinished. |
 | Proxy configuration, client certificates, custom CAs | HTTP/OAuth session configuration through CLI or library. Protocol configuration and desktop controls remain unfinished. |
 | Bruno secret storage and integrations | Not implemented |
 | Response-variable extraction and runner scripting | JSON selectors, JavaScript runtime variables, and sequential chaining; runner control remains unfinished |
