@@ -18,7 +18,7 @@ use crate::{
     Error, Result,
     bru::{Document, Pair},
     network::NetworkOptions,
-    oauth::TokenRequest,
+    oauth::{TokenCache, TokenRequest},
     scripts,
     selectors::Selector,
     uploads,
@@ -56,6 +56,7 @@ pub struct Engine {
     token_client: Client,
     timeout: Duration,
     custom_network: bool,
+    token_cache: TokenCache,
 }
 
 impl Engine {
@@ -91,7 +92,13 @@ impl Engine {
             token_client,
             timeout,
             custom_network: options.is_custom(),
+            token_cache: TokenCache::default(),
         })
+    }
+
+    /// Clear cached OAuth tokens and require acquisition on the next request.
+    pub fn clear_oauth_tokens(&self) -> Result<()> {
+        self.token_cache.clear()
     }
 
     /// Run one request with collection and folder defaults and environment variables.
@@ -361,7 +368,10 @@ impl Engine {
         }
         let mut builder = builder.headers(headers);
         if let Some(oauth) = oauth {
-            builder = builder.header(AUTHORIZATION, oauth.fetch(&self.token_client)?);
+            builder = builder.header(
+                AUTHORIZATION,
+                self.token_cache.fetch(oauth, &self.token_client)?,
+            );
         }
         let start = Instant::now();
         let mut raw_response = builder.send().map_err(Error::http)?;

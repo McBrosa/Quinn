@@ -149,7 +149,11 @@ Explicit overrides take highest precedence before pre-request scripts run.
 Scripts can change values for the current request. Overrides apply again before the next request.
 
 OAuth 2 client credentials support credentials in the token request body or Basic authentication header.
-Quinn fetches a fresh token for each request and sends it as a Bearer token.
+Quinn caches Bearer tokens in memory until their declared expiry.
+For automatic refresh, set `auto_refresh_token: true`.
+Quinn refreshes expired tokens when a refresh token is available. Otherwise Quinn acquires a new token.
+Tokens never persist to disk.
+Library users can call `Engine::clear_oauth_tokens()` to require acquisition on the next send.
 Authorization-code requests open the system browser and receive the redirect on a local loopback address.
 The browser step has a two-minute timeout. Provider denial cancels the request.
 See [COMPATIBILITY.md](COMPATIBILITY.md) for configuration examples and limits.

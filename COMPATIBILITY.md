@@ -99,8 +99,23 @@ auth:oauth2 {
 
 `credentials_placement` supports `header` and `body`. The default is `body`.
 The token response must contain a nonempty `access_token` and a Bearer `token_type`.
-Quinn fetches a token before each API request.
-It does not cache tokens or run a refresh-token flow.
+Quinn caches tokens in the current Engine until `expires_in` seconds after acquisition starts.
+`expires_in`, when present, must be a nonnegative JSON integer within the supported clock range.
+Missing expiry or zero expiry makes the access token single-use. Quinn then refreshes or reacquires on the next send.
+Cache entries are isolated by expanded endpoint, client ID and secret, scope, credential placement,
+refresh configuration, authorization URL, and callback URL. Concurrent acquisitions are serialized.
+Tokens and client secrets stay in memory only; no credentials are saved to disk.
+
+Set `auto_refresh_token: true` to use the `refresh_token` grant for expired tokens with a refresh token.
+The default is `false`, as in Bruno. Quinn acquires a new token instead.
+An absent or empty `refresh_token_url` defaults to `access_token_url`. It follows the same URL restrictions.
+Rotated refresh tokens replace the previous token; an omitted replacement retains the previous token.
+An empty refresh token is rejected. Refresh uses the configured body or Basic credentials.
+
+Refresh failure clears that cache entry and fails the send before any API request.
+It never retries or replays an API request. A later explicit send acquires a new token.
+API HTTP 401 responses do not trigger automatic refresh or replay.
+`Engine::clear_oauth_tokens()` clears all cached credentials. Restarting the application also clears them.
 The token endpoint does not follow redirects.
 The configured timeout applies separately to token acquisition and the API request.
 API response timing excludes token acquisition.
@@ -135,7 +150,7 @@ If your provider requires an exact redirect URI, use a fixed port.
 
 Authorization and token URLs must use HTTPS, except for numeric loopback addresses used for local development.
 
-Quinn generates fresh random state and a PKCE verifier for each request.
+Quinn generates fresh random state and a PKCE verifier for each browser acquisition.
 It ignores the stored Bruno `state` value and rejects `pkce: false`.
 The browser URL does not include the client secret.
 Public clients can omit `client_secret` with `credentials_placement: body`.
@@ -147,8 +162,8 @@ Provider denial cancels authorization. Other invalid callbacks are rejected whil
 The browser step times out after two minutes. Closing the browser alone does not cancel the listener.
 Ctrl+C stops the CLI. The desktop has no separate authorization-cancel button.
 
-Tokens stay in memory for the current request.
-Quinn does not support token caching, refresh, custom authorization parameters, or headless device authorization.
+Tokens use the in-memory cache and refresh flow described above.
+Quinn does not support custom authorization parameters or headless device authorization.
 
 ## Uploads
 
@@ -398,7 +413,7 @@ Custom configuration for gRPC and WebSockets, per-host certificates, and desktop
 | --- | --- |
 | Desktop request forms, tabs, syntax highlighting | HTTP forms and Source tabs. Syntax highlighting and protocol-specific forms remain unfinished. |
 | JavaScript scripts and tests | Embedded synchronous subset; Node APIs, async jobs, full Chai, and runner control remain unfinished |
-| OAuth | Client credentials and browser authorization code with PKCE S256 and loopback redirects. Token caching and refresh flows remain unfinished. |
+| OAuth | Client credentials and browser authorization code with PKCE S256 and loopback redirects. In-memory expiry-aware token caching and refresh-token rotation. No persistent token store or automatic API replay. |
 | OAuth 1, AWS SigV4, digest, NTLM, WSSE | Not implemented |
 | Multipart requests and binary uploads | Streamed file uploads. Custom boundaries remain unfinished. |
 | gRPC and WebSockets | Unary RPCs with local protobuf files and one-shot WebSocket text exchange. Reflection, streaming, and interactive sessions remain unfinished. |
