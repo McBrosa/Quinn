@@ -17,6 +17,7 @@ use serde_json::Value;
 
 use crate::{
     Error, Result,
+    aws::Signing,
     bru::{Document, Pair},
     digest,
     network::NetworkOptions,
@@ -208,12 +209,16 @@ impl Engine {
         if !matches!(url.scheme(), "http" | "https") {
             return Err(Error::invalid("URL scheme must be http or https"));
         }
+        let (auth_document, auth) = resolve_auth(request, &block.name, defaults)?;
         for name in ["query", "params:query"] {
             for pair in request.pairs(name)?.into_iter().filter(|pair| pair.enabled) {
-                url.query_pairs_mut().append_pair(
-                    &interpolate(&pair.key, &all_variables)?,
-                    &interpolate(&pair.value, &all_variables)?,
-                );
+                let key = interpolate(&pair.key, &all_variables)?;
+                let value = interpolate(&pair.value, &all_variables)?;
+                if auth == "awsv4" {
+                    crate::aws::append_query(&mut url, &key, &value);
+                } else {
+                    url.query_pairs_mut().append_pair(&key, &value);
+                }
             }
         }
         let mut headers = HeaderMap::new();
@@ -232,8 +237,7 @@ impl Engine {
                 headers.insert(name, value);
             }
         }
-        let (auth_document, auth) = resolve_auth(request, &block.name, defaults)?;
-        let client = if auth == "digest" {
+        let client = if matches!(auth.as_str(), "digest" | "awsv4") {
             &self.digest_client
         } else {
             &self.client
@@ -247,6 +251,7 @@ impl Engine {
         };
         let mut oauth = None;
         let mut digest = None;
+        let mut aws = None;
         match auth.as_str() {
             "none" => {}
             "basic" => {
@@ -272,6 +277,11 @@ impl Engine {
                 digest = Some((auth_value("username")?, auth_value("password")?));
             }
             "oauth2" => oauth = Some(TokenRequest::prepare(auth_document, &all_variables)?),
+            "awsv4" => {
+                let signing = Signing::prepare(auth_document, &all_variables)?;
+                signing.validate_url(&expanded_url, &url)?;
+                aws = Some(signing);
+            }
             "apikey" => {
                 let key = auth_value("key")?;
                 let value = auth_value("value")?;
@@ -300,14 +310,14 @@ impl Engine {
         let body_type = request
             .value(&block.name, "body")?
             .unwrap_or_else(|| "none".into());
-        if digest.is_some()
+        if (digest.is_some() || aws.is_some())
             && matches!(
                 body_type.as_str(),
                 "file" | "multipartForm" | "multipart-form"
             )
         {
             return Err(Error::Unsupported {
-                feature: "Digest authentication with streaming file or multipart bodies".into(),
+                feature: format!("{auth} authentication with streaming file or multipart bodies"),
             });
         }
         match body_type.as_str() {
@@ -420,7 +430,11 @@ impl Engine {
             );
         }
         let start = Instant::now();
-        let mut raw_response = if let Some((username, password)) = digest {
+        let mut raw_response = if let Some(aws) = aws {
+            let mut request = builder.build().map_err(Error::http)?;
+            aws.sign(&mut request)?;
+            self.digest_client.execute(request).map_err(Error::http)?
+        } else if let Some((username, password)) = digest {
             digest::send(
                 &self.digest_client,
                 builder.build().map_err(Error::http)?,
@@ -527,6 +541,7 @@ fn validate(document: &Document) -> Result<()> {
                     | "auth"
                     | "auth:basic"
                     | "auth:digest"
+                    | "auth:awsv4"
                     | "auth:bearer"
                     | "auth:apikey"
                     | "auth:oauth2"

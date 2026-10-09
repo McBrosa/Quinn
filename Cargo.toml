@@ -28,6 +28,7 @@ eframe = { version = "0.36.2", optional = true, default-features = false, featur
 futures-util = { version = "0.3", features = ["sink"] }
 getrandom = "0.4"
 http = "1"
+hmac = "0.12"
 md-5 = "0.10"
 percent-encoding = "2.3"
 prost = "0.14"
@@ -43,6 +44,7 @@ sha2 = "0.10"
 shlex = "2"
 thiserror = "2"
 tempfile = "3"
+time = "0.3"
 tokio = { version = "1", features = ["rt", "net", "time"] }
 tokio-tungstenite = { version = "0.30", features = ["rustls-tls-native-roots"] }
 tonic = { version = "0.14.6", default-features = false, features = ["channel", "tls-native-roots"] }

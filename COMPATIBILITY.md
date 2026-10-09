@@ -164,6 +164,47 @@ Challenge caching, stale-nonce retries, proxy Digest authentication, and `Authen
 The final response remains available for normal assertions, scripts, and response-variable extraction.
 Digest does not replace TLS. Use HTTPS for real credentials.
 
+## AWS Signature V4 authentication
+
+HTTP requests support Bruno's `auth: awsv4` with explicit credentials:
+
+```bru
+get {
+  url: https://example.execute-api.us-east-1.amazonaws.com/resource
+  auth: awsv4
+}
+auth:awsv4 {
+  accessKeyId: {{aws_access_key}}
+  secretAccessKey: {{aws_secret_key}}
+  sessionToken: {{aws_session_token}}
+  region: us-east-1
+  service: execute-api
+}
+```
+
+`sessionToken` is optional. Region and service are required lowercase values.
+Variables and collection/folder authentication inheritance work as with other HTTP authentication.
+Quinn signs the final method, URL, query parameters, headers, and buffered body after pre-request scripts.
+JSON, text, XML, SPARQL, form-urlencoded, and GraphQL bodies are supported.
+The signing key and session token never appear in errors or debug output from the signer.
+
+Quinn follows the [AWS signing procedure](https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_sigv-create-signed-request.html).
+Query parameters use canonical encoding. Only the signing representation is sorted.
+Wire order, duplicate keys, and literal URL plus signs are retained.
+Spaces from request parameters use `%20`, not form-encoded plus signs.
+Most services use normalized paths with double encoding of existing percent escapes.
+S3 retains the transmitted path, including repeated slashes and existing percent escapes.
+The payload hash header is included for S3.
+S3 paths with dot segments or literal backslashes are rejected because URL parsing changes their object keys.
+Query parameters must contain valid UTF-8 and percent escapes.
+
+Explicit signing headers, URL credentials, fragments, and presigned URL parameters cannot combine with this authentication.
+Signed requests never follow redirects, including same-origin redirects, regardless of `--max-redirects`.
+File and multipart bodies are rejected before file or network access.
+AWS profiles, ambient credentials, credential discovery, presigned URLs, SigV4a, and streaming signatures remain unsupported.
+Native Forms do not yet expose AWS fields. Use Source to edit these requests.
+Use HTTPS for real credentials, especially when a session token is configured.
+
 ## OAuth 2 client credentials
 
 Quinn supports the [client-credentials grant](https://www.rfc-editor.org/rfc/rfc6749#section-4.4).
@@ -590,7 +631,8 @@ Custom configuration for gRPC and WebSockets, per-host certificates, and desktop
 | JavaScript scripts and tests | Embedded synchronous subset; Node APIs, async jobs, full Chai, and runner control remain unfinished |
 | OAuth | Client credentials and browser authorization code with PKCE S256 and loopback redirects. In-memory expiry-aware token caching and refresh-token rotation. No persistent token store or automatic API replay. |
 | HTTP Digest | MD5/SHA-256 auth or no-qop challenges, one buffered-body retry, no redirects. File/multipart replay and extended algorithms remain unsupported. |
-| OAuth 1, AWS SigV4, NTLM, WSSE | Not implemented |
+| AWS SigV4 | Explicit-credential HTTP signing with buffered bodies; no profiles, presigned URLs, streaming signatures, or native forms. |
+| OAuth 1, NTLM, WSSE | Not implemented |
 | Multipart requests and binary uploads | Streamed file uploads. Custom boundaries remain unfinished. |
 | gRPC and WebSockets | Unary and finite streaming RPCs with local protobuf files or server reflection, plus one-shot WebSocket exchange. Interactive sessions remain unfinished. |
 | OpenAPI, Postman, Insomnia, and cURL import/export | Offline Postman v2.1, OpenAPI 3 JSON/YAML, Insomnia v4 JSON, and cURL imports. Supported HTTP subsets export to Postman v2.1 and OpenAPI 3 JSON. |

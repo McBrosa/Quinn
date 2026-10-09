@@ -10,6 +10,7 @@ pub mod variables;
 
 pub use error::{Error, Result};
 
+mod aws;
 mod digest;
 mod oauth;
 mod oauth_interactive;
