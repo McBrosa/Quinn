@@ -1,0 +1,21 @@
+meta {
+  name: Upload a document
+  type: http
+  seq: 3
+}
+
+post {
+  url: {{baseUrl}}/post
+  body: multipartForm
+  auth: none
+}
+
+body:multipart-form {
+  document: @file(uploads/payload.txt) @contentType(text/plain)
+  metadata: {"client":"Quinn"} @contentType(application/json)
+}
+
+assert {
+  res.status: eq 200
+  res.body.files.document: contains Quinn
+}

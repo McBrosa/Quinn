@@ -1,6 +1,7 @@
 use std::{
     collections::BTreeMap,
     io::Read,
+    path::Path,
     time::{Duration, Instant},
 };
 
@@ -8,7 +9,7 @@ use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
 use reqwest::{
     Method, Url,
     blocking::Client,
-    header::{CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue},
+    header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue},
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -16,6 +17,9 @@ use serde_json::Value;
 use crate::{
     Error, Result,
     bru::{Document, Pair},
+    oauth::TokenRequest,
+    selectors::Selector,
+    uploads,
     variables::{Variables, interpolate},
 };
 
@@ -32,6 +36,9 @@ pub struct Response {
     pub bytes: usize,
     pub elapsed_ms: u128,
     pub assertions: Vec<Assertion>,
+    #[serde(skip_serializing)]
+    pub variables: Variables,
+    pub variable_errors: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -44,6 +51,7 @@ pub struct Assertion {
 
 pub struct Engine {
     client: Client,
+    token_client: Client,
 }
 
 impl Engine {
@@ -54,11 +62,19 @@ impl Engine {
         let client = Client::builder()
             .timeout(timeout)
             .cookie_store(true)
-            .user_agent("Quinn/0.1")
+            .user_agent(concat!("Quinn/", env!("CARGO_PKG_VERSION")))
             .redirect(reqwest::redirect::Policy::limited(10))
             .build()
             .map_err(Error::http)?;
-        Ok(Self { client })
+        let token_client = Client::builder()
+            .timeout(timeout)
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .map_err(Error::http)?;
+        Ok(Self {
+            client,
+            token_client,
+        })
     }
 
     /// Run one request with collection and folder defaults and environment variables.
@@ -67,6 +83,18 @@ impl Engine {
         request: &Document,
         defaults: &[Document],
         variables: &Variables,
+    ) -> Result<Response> {
+        let root = std::env::current_dir().map_err(|source| Error::io(Path::new("."), source))?;
+        self.send_in(request, defaults, variables, &root)
+    }
+
+    /// Run a request with upload paths relative to the given collection root.
+    pub fn send_in(
+        &self,
+        request: &Document,
+        defaults: &[Document],
+        variables: &Variables,
+        root: &Path,
     ) -> Result<Response> {
         let documents: Vec<&Document> = defaults.iter().chain(std::iter::once(request)).collect();
         for document in &documents {
@@ -153,12 +181,14 @@ impl Engine {
                 .ok_or_else(|| Error::invalid(format!("{auth} auth has no {key}")))?;
             interpolate(&value, &all_variables)
         };
+        let mut oauth = None;
         match auth.as_str() {
             "none" => {}
             "basic" => {
                 builder = builder.basic_auth(auth_value("username")?, Some(auth_value("password")?))
             }
             "bearer" => builder = builder.bearer_auth(auth_value("token")?),
+            "oauth2" => oauth = Some(TokenRequest::prepare(auth_document, &all_variables)?),
             "apikey" => {
                 let key = auth_value("key")?;
                 let value = auth_value("value")?;
@@ -213,9 +243,23 @@ impl Engine {
                     .or_insert(HeaderValue::from_static(content_type));
                 builder = builder.body(expanded);
             }
-            "form-urlencoded" => {
+            "formUrlEncoded" | "form-urlencoded" => {
                 let pairs = expanded_pairs(request.pairs("body:form-urlencoded")?, &all_variables)?;
                 builder = builder.form(&pairs);
+            }
+            "multipartForm" | "multipart-form" => {
+                let pairs = request.pairs("body:multipart-form")?;
+                let form = uploads::multipart(pairs, root, &all_variables)?;
+                headers.remove(CONTENT_TYPE);
+                builder = builder.multipart(form);
+            }
+            "file" => {
+                let pairs = request.pairs("body:file")?;
+                let (body, content_type) = uploads::binary(pairs, root, &all_variables)?;
+                let content_type = HeaderValue::from_str(&content_type)
+                    .map_err(|_| Error::invalid("invalid upload content type"))?;
+                headers.entry(CONTENT_TYPE).or_insert(content_type);
+                builder = builder.body(body);
             }
             "graphql" => {
                 let query = request
@@ -259,8 +303,28 @@ impl Engine {
             pair.value = interpolate(&pair.value, &all_variables)?;
             validate_assertion(&pair.key, &pair.value)?;
         }
+        let mut extractions = Vec::new();
+        for document in &documents {
+            for pair in document
+                .pairs("vars:post-response")?
+                .into_iter()
+                .filter(|pair| pair.enabled)
+            {
+                if pair.key.starts_with('@') {
+                    return Err(Error::Unsupported {
+                        feature: "persistent post-response variables".into(),
+                    });
+                }
+                let selector = Selector::parse(&pair.value)?;
+                extractions.push((pair.key, selector));
+            }
+        }
+        let mut builder = builder.headers(headers);
+        if let Some(oauth) = oauth {
+            builder = builder.header(AUTHORIZATION, oauth.fetch(&self.token_client)?);
+        }
         let start = Instant::now();
-        let mut raw_response = builder.headers(headers).send().map_err(Error::http)?;
+        let mut raw_response = builder.send().map_err(Error::http)?;
         let status = raw_response.status().as_u16();
         let headers = raw_response
             .headers()
@@ -290,11 +354,22 @@ impl Engine {
             bytes: bytes.len(),
             elapsed_ms: start.elapsed().as_millis(),
             assertions: Vec::new(),
+            variables: Variables::new(),
+            variable_errors: Vec::new(),
         };
         for pair in assertions {
             response
                 .assertions
-                .push(evaluate_assertion(pair, &response));
+                .push(evaluate_assertion(pair, &response)?);
+        }
+        for (name, selector) in extractions {
+            match selector.read(&response) {
+                Some(value) => { response.variables.insert(name, value); },
+                None => response.variable_errors.push(format!("cannot extract response variable '{name}': field is missing or body is not JSON")),
+            }
+        }
+        if !response.variable_errors.is_empty() {
+            response.variables.clear();
         }
         Ok(response)
     }
@@ -302,7 +377,9 @@ impl Engine {
 
 impl Response {
     pub fn passed(&self) -> bool {
-        self.status < 400 && self.assertions.iter().all(|assertion| assertion.passed)
+        self.status < 400
+            && self.assertions.iter().all(|assertion| assertion.passed)
+            && self.variable_errors.is_empty()
     }
 
     pub fn pretty_body(&self) -> String {
@@ -324,10 +401,12 @@ fn validate(document: &Document) -> Result<()> {
                     | "auth:basic"
                     | "auth:bearer"
                     | "auth:apikey"
+                    | "auth:oauth2"
                     | "params:query"
                     | "params:path"
                     | "query"
                     | "vars:pre-request"
+                    | "vars:post-response"
                     | "assert"
                     | "body"
                     | "body:json"
@@ -335,6 +414,8 @@ fn validate(document: &Document) -> Result<()> {
                     | "body:xml"
                     | "body:sparql"
                     | "body:form-urlencoded"
+                    | "body:multipart-form"
+                    | "body:file"
                     | "body:graphql"
                     | "body:graphql:vars"
             )
@@ -343,7 +424,7 @@ fn validate(document: &Document) -> Result<()> {
         }
         if matches!(
             block.name.as_str(),
-            "script:pre-request" | "script:post-response" | "tests" | "vars:post-response"
+            "script:pre-request" | "script:post-response" | "tests"
         ) && block.content.trim().is_empty()
         {
             continue;
@@ -415,16 +496,7 @@ fn replace_path_parameter(url: &str, key: &str, value: &str) -> Result<String> {
 }
 
 fn validate_assertion(expression: &str, expected: &str) -> Result<()> {
-    if expression != "res.status"
-        && expression != "res.body"
-        && expression != "res.responseTime"
-        && !expression.starts_with("res.body.")
-        && !expression.starts_with("res.headers.")
-    {
-        return Err(Error::Unsupported {
-            feature: format!("assertion expression '{expression}'"),
-        });
-    }
+    Selector::parse(expression)?;
     let operator = expected.split_whitespace().next().unwrap_or("");
     if !matches!(
         operator,
@@ -446,43 +518,18 @@ fn validate_assertion(expression: &str, expected: &str) -> Result<()> {
     Ok(())
 }
 
-fn evaluate_assertion(pair: Pair, response: &Response) -> Assertion {
+fn evaluate_assertion(pair: Pair, response: &Response) -> Result<Assertion> {
     let Pair {
         key,
         value,
         enabled: _,
+        is_list: _,
     } = pair;
     let (operator, expected) = value
         .split_once(char::is_whitespace)
         .unwrap_or((&value, ""));
     let expected = expected.trim();
-    let actual = match key.as_str() {
-        "res.status" => Some(response.status.to_string()),
-        "res.responseTime" => Some(response.elapsed_ms.to_string()),
-        "res.body" => Some(response.body.clone()),
-        _ if key.starts_with("res.headers.") => response
-            .headers
-            .get(&key[12..].to_ascii_lowercase())
-            .cloned(),
-        _ => {
-            let json = serde_json::from_str::<Value>(&response.body).ok();
-            json.and_then(|body| {
-                let mut current = &body;
-                for segment in key[9..].split('.') {
-                    current = if let Ok(index) = segment.parse::<usize>() {
-                        current.get(index)?
-                    } else {
-                        current.get(segment)?
-                    };
-                }
-                Some(
-                    current
-                        .as_str()
-                        .map_or_else(|| current.to_string(), str::to_owned),
-                )
-            })
-        }
-    };
+    let actual = Selector::parse(&key)?.read(response);
     let passed = match operator {
         "exists" => actual.is_some(),
         "notExists" => actual.is_none(),
@@ -507,10 +554,10 @@ fn evaluate_assertion(pair: Pair, response: &Response) -> Assertion {
                 }),
         }),
     };
-    Assertion {
+    Ok(Assertion {
         expression: key,
         expected: value,
         actual: actual.unwrap_or_else(|| "<missing>".into()),
         passed,
-    }
+    })
 }

@@ -17,6 +17,7 @@ pub struct Pair {
     pub key: String,
     pub value: String,
     pub enabled: bool,
+    pub is_list: bool,
 }
 
 impl Document {
@@ -132,6 +133,7 @@ impl Block {
                 return Err(parse_error(self.line + index + 1, "empty key"));
             }
             let raw_value = entry[separator + 1..].trim();
+            let is_list = raw_value == "[";
             let value = if raw_value == "[" {
                 let mut items = Vec::new();
                 let mut closed = false;
@@ -147,8 +149,8 @@ impl Block {
                 }
                 items.join("\n")
             } else if let Some(rest) = raw_value.strip_prefix("'''") {
-                if let Some(value) = rest.strip_suffix("'''") {
-                    value.to_owned()
+                if let Some((value, suffix)) = rest.split_once("'''") {
+                    append_annotation(value, suffix, self.line + index + 1)?
                 } else {
                     let mut items = Vec::new();
                     if !rest.is_empty() {
@@ -156,7 +158,16 @@ impl Block {
                     }
                     let mut closed = false;
                     for (_, item) in lines.by_ref() {
-                        if item.trim() == "'''" {
+                        if let Some((last, suffix)) = item.split_once("'''") {
+                            if !last.trim().is_empty() {
+                                items.push(last.to_owned());
+                            }
+                            let value = append_annotation(
+                                &items.join("\n"),
+                                suffix,
+                                self.line + index + 1,
+                            )?;
+                            items = vec![value];
                             closed = true;
                             break;
                         }
@@ -177,10 +188,22 @@ impl Block {
                 key,
                 value,
                 enabled,
+                is_list,
             });
         }
         Ok(pairs)
     }
+}
+
+fn append_annotation(value: &str, suffix: &str, line: usize) -> Result<String> {
+    let suffix = suffix.trim();
+    if suffix.is_empty() {
+        return Ok(value.to_owned());
+    }
+    if suffix.starts_with("@contentType(") && suffix.ends_with(')') {
+        return Ok(format!("{value} {suffix}"));
+    }
+    Err(parse_error(line, "unexpected text after a multiline value"))
 }
 
 fn outdent(lines: &[&str]) -> String {

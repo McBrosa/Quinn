@@ -65,17 +65,42 @@ The default timeout is 30 seconds. Use `--timeout SECONDS` to change it.
 ## Supported features
 
 - HTTP methods, custom methods, query parameters, and path parameters.
-- Headers, basic authentication, bearer tokens, and API keys.
-- JSON, text, XML, SPARQL, form-urlencoded, and GraphQL request bodies.
+- Headers, basic authentication, bearer tokens, API keys, and OAuth 2 client credentials.
+- JSON, text, XML, SPARQL, form-urlencoded, GraphQL, multipart, and binary request bodies.
 - Bruno environments, nested variables, collection defaults, and folder defaults.
 - Status, response body, header, and response-time assertions.
 - Cookies within one app session or CLI run.
+- Response variables that pass tokens and IDs between requests.
 - Response bodies, headers, timing, byte counts, and JSON reports.
 
 Quinn rejects unsupported executable blocks before it sends a request.
 It does not silently skip scripts or JavaScript tests.
 TLS certificate verification remains enabled.
 Responses have a 16 MiB limit after decompression.
+
+## Uploads and request chains
+
+The starter collection includes a multipart upload example.
+Upload paths are relative to the collection root, including requests in nested folders.
+Quinn streams file contents rather than loading the complete file into memory.
+
+Use `vars:post-response` to extract a value for later requests:
+
+```bru
+vars:post-response {
+  token: res.body.access_token
+  userId: res.body.users[0].id
+}
+```
+
+Then reference `{{token}}` or `{{userId}}` in the next request.
+The CLI keeps these variables for the current run.
+The desktop keeps them until the collection or environment changes, or you click **Reset variables**.
+Explicit overrides keep highest precedence.
+
+OAuth 2 client credentials support credentials in the token request body or Basic authentication header.
+Quinn fetches a fresh token for each request and sends it as a Bearer token.
+See [COMPATIBILITY.md](COMPATIBILITY.md) for configuration examples and limits.
 
 ## Development
 

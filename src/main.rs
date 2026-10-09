@@ -101,7 +101,8 @@ fn run(args: Args) -> Result<bool> {
                 || Ok(Variables::new()),
                 |name| collection::environment(&root, &name),
             )?;
-            values.extend(variables);
+            let overrides: Variables = variables.into_iter().collect();
+            values.extend(overrides.clone());
             let entries = collection::discover(&path)?;
             if entries.is_empty() {
                 return Err(Error::Invalid {
@@ -115,11 +116,13 @@ fn run(args: Args) -> Result<bool> {
                 let result = (|| {
                     let document = Document::parse(&collection::read(&entry.path)?)?;
                     let defaults = collection::defaults(&root, &entry.path)?;
-                    engine.send(&document, &defaults, &values)
+                    engine.send_in(&document, &defaults, &values, &root)
                 })();
                 match result {
                     Ok(response) => {
                         passed &= response.passed();
+                        values.extend(response.variables.clone());
+                        values.extend(overrides.clone());
                         if json {
                             report.push(serde_json::json!({"path": entry.path, "name": entry.name, "passed": response.passed(), "response": response}));
                         } else {
@@ -139,6 +142,9 @@ fn run(args: Args) -> Result<bool> {
                                     assertion.expected,
                                     assertion.actual
                                 );
+                            }
+                            for error in &response.variable_errors {
+                                eprintln!("  FAIL {error}");
                             }
                             println!("{}\n", response.pretty_body());
                         }

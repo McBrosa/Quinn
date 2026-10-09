@@ -51,6 +51,7 @@ struct Quinn {
     environments: Vec<String>,
     environment: String,
     overrides: String,
+    runtime_variables: Variables,
     filter: String,
     selected: Option<PathBuf>,
     source: String,
@@ -87,6 +88,7 @@ impl Quinn {
             environments: Vec::new(),
             environment: String::new(),
             overrides: String::new(),
+            runtime_variables: Variables::new(),
             filter: String::new(),
             selected: None,
             source: String::new(),
@@ -140,6 +142,7 @@ impl Quinn {
                 self.environments = environments;
                 self.environment.clear();
                 self.overrides.clear();
+                self.runtime_variables.clear();
                 self.selected = None;
                 self.source.clear();
                 self.original.clear();
@@ -209,6 +212,7 @@ impl Quinn {
             } else {
                 collection::environment(root, &self.environment)?
             };
+            variables.extend(self.runtime_variables.clone());
             for line in self
                 .overrides
                 .lines()
@@ -226,10 +230,10 @@ impl Quinn {
                 }
                 variables.insert(key.trim().to_owned(), value.to_owned());
             }
-            Ok::<_, quinn_api::Error>((request, defaults, variables))
+            Ok::<_, quinn_api::Error>((request, defaults, variables, root.clone()))
         })();
         match prepared {
-            Ok((request, defaults, variables)) => {
+            Ok((request, defaults, variables, root)) => {
                 let engine = Arc::clone(&self.engine);
                 let (sender, receiver) = mpsc::channel();
                 self.receiver = Some(receiver);
@@ -238,7 +242,7 @@ impl Quinn {
                 self.response_text.clear();
                 let context = context.clone();
                 thread::spawn(move || {
-                    let _ = sender.send(engine.send(&request, &defaults, &variables));
+                    let _ = sender.send(engine.send_in(&request, &defaults, &variables, &root));
                     context.request_repaint();
                 });
             }
@@ -332,24 +336,39 @@ impl Quinn {
             });
         });
         ui.add_space(6.0);
-        ui.horizontal(|ui| {
-            ui.label("Environment");
-            egui::ComboBox::from_id_salt("environment")
-                .selected_text(if self.environment.is_empty() {
-                    "No environment"
-                } else {
-                    &self.environment
-                })
-                .show_ui(ui, |ui| {
-                    ui.selectable_value(&mut self.environment, String::new(), "No environment");
-                    for name in &self.environments {
-                        ui.selectable_value(&mut self.environment, name.clone(), name);
-                    }
-                });
-            if let Some(root) = &self.root {
-                ui.label(RichText::new(root.display().to_string()).small().weak());
-            }
+        let previous_environment = self.environment.clone();
+        ui.add_enabled_ui(self.receiver.is_none(), |ui| {
+            ui.horizontal(|ui| {
+                ui.label("Environment");
+                egui::ComboBox::from_id_salt("environment")
+                    .selected_text(if self.environment.is_empty() {
+                        "No environment"
+                    } else {
+                        &self.environment
+                    })
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut self.environment, String::new(), "No environment");
+                        for name in &self.environments {
+                            ui.selectable_value(&mut self.environment, name.clone(), name);
+                        }
+                    });
+                if ui
+                    .add_enabled(
+                        !self.runtime_variables.is_empty(),
+                        egui::Button::new("Reset variables"),
+                    )
+                    .clicked()
+                {
+                    self.runtime_variables.clear();
+                }
+                if let Some(root) = &self.root {
+                    ui.label(RichText::new(root.display().to_string()).small().weak());
+                }
+            });
         });
+        if self.environment != previous_environment {
+            self.runtime_variables.clear();
+        }
     }
 
     fn sidebar(&mut self, ui: &mut egui::Ui) {
@@ -612,6 +631,8 @@ impl eframe::App for Quinn {
         if let Some(receiver) = &self.receiver {
             match receiver.try_recv() {
                 Ok(Ok(response)) => {
+                    self.runtime_variables.extend(response.variables.clone());
+                    self.error = response.variable_errors.join("; ");
                     self.response_text = response.pretty_body();
                     self.response = Some(response);
                     self.receiver = None;
