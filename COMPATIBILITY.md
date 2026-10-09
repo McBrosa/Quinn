@@ -632,6 +632,7 @@ Custom configuration for gRPC and WebSockets, per-host certificates, and desktop
 | Area | Current status |
 | --- | --- |
 | Desktop request forms, tabs, syntax highlighting | HTTP forms and Source tabs. Syntax highlighting and protocol-specific forms remain unfinished. |
+| CLI runner reports | JSON stdout/file reports and JUnit per-request results with bail/delay/tag filters. HTML, reporter redaction flags, and Bruno's exact JSON schema remain unfinished. |
 | JavaScript scripts and tests | Embedded synchronous subset; Node APIs, async jobs, full Chai, and runner control remain unfinished |
 | OAuth | Client credentials and browser authorization code with PKCE S256 and loopback redirects. In-memory expiry-aware token caching and refresh-token rotation. No persistent token store or automatic API replay. |
 | HTTP Digest | MD5/SHA-256 auth or no-qop challenges, one buffered-body retry, no redirects. File/multipart replay and extended algorithms remain unsupported. |
