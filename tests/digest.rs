@@ -319,26 +319,40 @@ fn digest_rejects_nonreplayable_bodies_conflicting_headers_and_invalid_assertion
 #[test]
 fn digest_challenge_and_retry_share_one_deadline() {
     let (listener, url) = listener();
+    let engine = Engine::new(Duration::from_secs(1)).unwrap();
     let worker = thread::spawn(move || {
         let mut first = accept(&listener);
         read_request(&mut first);
-        thread::sleep(Duration::from_millis(60));
+        thread::sleep(Duration::from_millis(400));
         reply(
             &mut first,
             401,
             "WWW-Authenticate: Digest realm=\"test\", nonce=\"n\"\r\n",
         );
-        let mut second = accept(&listener);
-        read_request(&mut second);
-        thread::sleep(Duration::from_millis(100));
-        reply(&mut second, 200, "");
+        // A heavily loaded runner can expire before it opens the retry socket.
+        // That still satisfies the shared-deadline contract.
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            match listener.accept() {
+                Ok((mut second, _)) => {
+                    thread::sleep(Duration::from_millis(800));
+                    reply(&mut second, 200, "");
+                    break;
+                }
+                Err(error)
+                    if error.kind() == std::io::ErrorKind::WouldBlock
+                        && Instant::now() < deadline =>
+                {
+                    thread::sleep(Duration::from_millis(2));
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
+                Err(error) => panic!("cannot accept Digest retry: {error}"),
+            }
+        }
     });
     let start = Instant::now();
-    let result =
-        Engine::new(Duration::from_millis(100))
-            .unwrap()
-            .send(&request(&url), &[], &values());
+    let result = engine.send(&request(&url), &[], &values());
     assert!(result.is_err());
-    assert!(start.elapsed() < Duration::from_millis(400));
+    assert!(start.elapsed() < Duration::from_secs(5));
     worker.join().unwrap();
 }

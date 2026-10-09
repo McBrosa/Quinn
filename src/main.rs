@@ -152,7 +152,7 @@ enum ExportFormat {
 }
 
 fn main() -> ExitCode {
-    match run(Args::parse()) {
+    match dispatch(Args::parse()) {
         Ok(true) => ExitCode::SUCCESS,
         Ok(false) => ExitCode::FAILURE,
         Err(error) => {
@@ -160,6 +160,25 @@ fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+fn dispatch(args: Args) -> Result<bool> {
+    if !matches!(&args.command, Some(Command::Run { .. })) {
+        // Native windows must be created on the operating system's main thread.
+        return run(args);
+    }
+    // Boa's parser needs more stack than the Windows main thread provides.
+    std::thread::Builder::new()
+        .name("quinn-runner".into())
+        .stack_size(8 * 1024 * 1024)
+        .spawn(move || run(args))
+        .map_err(|error| Error::Invalid {
+            reason: format!("cannot start collection runner: {error}"),
+        })?
+        .join()
+        .map_err(|_| Error::Invalid {
+            reason: "collection runner panicked".into(),
+        })?
 }
 
 fn run(args: Args) -> Result<bool> {
