@@ -155,6 +155,7 @@ Quinn refreshes expired tokens when a refresh token is available. Otherwise Quin
 Tokens never persist to disk.
 Library users can call `Engine::clear_oauth_tokens()` to require acquisition on the next send.
 Authorization-code requests open the system browser and receive the redirect on a local loopback address.
+The desktop's **Clear OAuth tokens** button forces token acquisition on the next Send.
 The browser step has a two-minute timeout. Provider denial cancels the request.
 See [COMPATIBILITY.md](COMPATIBILITY.md) for configuration examples and limits.
 

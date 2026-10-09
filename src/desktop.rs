@@ -366,6 +366,21 @@ impl Quinn {
                 self.refresh();
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui
+                    .add_enabled(
+                        self.root.is_some() && self.receiver.is_none(),
+                        egui::Button::new("Clear OAuth tokens"),
+                    )
+                    .on_hover_text(
+                        "Clear tokens kept in memory. The next Send acquires a fresh token.",
+                    )
+                    .clicked()
+                {
+                    match self.engine.clear_oauth_tokens() {
+                        Ok(()) => self.error.clear(),
+                        Err(error) => self.error = error.to_string(),
+                    }
+                }
                 egui::widgets::global_theme_preference_switch(ui);
             });
         });
