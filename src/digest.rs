@@ -300,4 +300,26 @@ mod tests {
         assert!(header.to_str().unwrap().contains("opaque=\"with,comma\""));
         assert!(header.is_sensitive());
     }
+
+    #[test]
+    fn matches_the_rfc_7616_sha256_reference_vector() {
+        // https://www.rfc-editor.org/rfc/rfc7616.html#section-3.9.1
+        let fields = parse_challenge("Digest realm=\"http-auth@example.org\", qop=\"auth, auth-int\", algorithm=SHA-256, nonce=\"7ypf/xlj9XXwfDPEoM4URrv/xwf94BcCAzFZH4GiTo0v\"").unwrap();
+        let header = authorization(
+            &fields,
+            "Mufasa",
+            "Circle of Life",
+            "GET",
+            "/dir/index.html",
+            "f2/wE4q74E6zIJEtWaHKaf5wv/H5QzzpXusqGemxURZJ",
+        )
+        .unwrap();
+        assert!(
+            header
+                .to_str()
+                .unwrap()
+                .contains("753927fa0e85d155564e2e272a28d1802ca10daf4496794697cf8db5856cb6c1")
+        );
+        assert!(header.is_sensitive());
+    }
 }

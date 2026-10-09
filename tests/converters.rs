@@ -377,7 +377,7 @@ fn export_does_not_follow_existing_destination_symlinks() {
 fn yaml_collections_export_through_the_shared_loader() {
     let root = tempfile::tempdir().unwrap();
     fs::write(root.path().join("opencollection.yml"), "opencollection: 1.0.0\ninfo:\n  name: YAML\nrequest:\n  headers:\n    - name: X-Parent\n      value: inherited\n").unwrap();
-    fs::write(root.path().join("request.yml"), "info:\n  name: Get users\n  type: http\n  seq: 1\nhttp:\n  method: GET\n  url: https://example.test/users\n  auth: none\nsettings:\n  timeout: 0\n  encodeUrl: true\n  followRedirects: true\n").unwrap();
+    fs::write(root.path().join("request.yml"), "info:\n  name: Get users\n  type: http\n  seq: 1\nhttp:\n  method: GET\n  url: https://example.test/users\nsettings:\n  timeout: 0\n  encodeUrl: true\n  followRedirects: true\n").unwrap();
     for (format, import) in [
         (exporters::Format::Postman, Format::Postman),
         (exporters::Format::OpenApi, Format::OpenApi),
