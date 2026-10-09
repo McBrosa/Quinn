@@ -376,32 +376,113 @@ function test(name, fn) {
     __quinn.tests.push({name:String(name), passed:false, error:String(error)});
   }
 }
+function deepEqual(actual, expected, seen=[]) {
+  if (Object.is(actual, expected)) return true;
+  if (actual === null || expected === null || typeof actual !== 'object' || typeof expected !== 'object') return false;
+  for (const value of [actual,expected]) {
+    const prototype = Object.getPrototypeOf(value);
+    if (!Array.isArray(value) && prototype !== Object.prototype && prototype !== null)
+      unsupported('deep equality for non-JSON objects');
+  }
+  if (Array.isArray(actual) !== Array.isArray(expected)) return false;
+  if (Array.isArray(actual) && actual.length !== expected.length) return false;
+  if (seen.some(pair => pair[0] === actual && pair[1] === expected)) return true;
+  seen.push([actual,expected]);
+  const keys = value => Reflect.ownKeys(value).filter(key => Object.prototype.propertyIsEnumerable.call(value,key));
+  const left = keys(actual), right = keys(expected);
+  return left.length === right.length && left.every(key => right.includes(key) && deepEqual(actual[key],expected[key],seen));
+}
 function expect(actual) {
-  function chain(negate=false, deep=false) {
-    const check = (passed, message) => {if (negate ? passed : !passed) throw Error(message);};
+  function chain(negate=false, deep=false, own=false) {
+    const check = (passed, message) => {
+      if (negate ? passed : !passed) throw Error(message);
+      return chain(negate,deep,own);
+    };
+    const equal = (left,right) => deep ? deepEqual(left,right) : left === right;
+    const has = key => actual != null && (own ? Object.hasOwn(actual,key) : key in Object(actual));
+    const numeric = (...values) => {
+      if (values.some(value => typeof value !== 'number' || Number.isNaN(value))) throw Error('expected numeric arguments');
+    };
+    const matches = (text,pattern) => {
+      const index = pattern.lastIndex;
+      try { return pattern.test(text); } finally { pattern.lastIndex = index; }
+    };
     const api = {
-      equal: expected => {check(deep ? JSON.stringify(actual) === JSON.stringify(expected) : actual === expected, 'expected equality');},
-      eql: expected => {check(JSON.stringify(actual) === JSON.stringify(expected), 'expected deep equality');},
-      include: expected => {check(actual != null && typeof actual.includes === 'function' && actual.includes(expected), 'expected inclusion');},
-      above: expected => {check(actual > expected, 'expected greater value');},
-      below: expected => {check(actual < expected, 'expected smaller value');},
-      within: (min,max) => {check(actual >= min && actual <= max, 'expected value within range');},
-      a: type => {check(type === 'array' ? Array.isArray(actual) : typeof actual === type, 'expected type ' + type);},
-      property: (key,value) => {
-        check(actual != null && Object.hasOwn(actual,key), 'expected property ' + key);
-        if (value !== undefined) check(actual[key] === value, 'expected property value');
-        return expect(actual[key]);
+      equal: expected => check(equal(actual,expected), 'expected equality'),
+      eql: expected => check(deepEqual(actual,expected), 'expected deep equality'),
+      include: expected => {
+        let included;
+        if (typeof actual === 'string') {
+          if (typeof expected !== 'string') throw Error('expected a string for inclusion');
+          included = actual.includes(expected);
+        } else if (Array.isArray(actual)) included = actual.some(value => equal(value,expected));
+        else if (Object.prototype.toString.call(actual) === '[object Object]') {
+          if (Object.prototype.toString.call(expected) !== '[object Object]') throw Error('expected an object for inclusion');
+          included = Object.keys(expected).every(key => has(key) && equal(actual[key],expected[key]));
+        } else unsupported('inclusion for this value type');
+        return check(included,'expected inclusion');
+      },
+      above: expected => {numeric(actual,expected); return check(actual > expected, 'expected greater value');},
+      least: expected => {numeric(actual,expected); return check(actual >= expected, 'expected minimum value');},
+      below: expected => {numeric(actual,expected); return check(actual < expected, 'expected smaller value');},
+      most: expected => {numeric(actual,expected); return check(actual <= expected, 'expected maximum value');},
+      within: (min,max) => {numeric(actual,min,max); return check(actual >= min && actual <= max, 'expected value within range');},
+      lengthOf: expected => {
+        if (actual == null || typeof actual.length !== 'number') throw Error('expected a value with a length');
+        numeric(expected); return check(actual.length === expected,'expected length');
+      },
+      match: pattern => {
+        if (typeof actual !== 'string' || !(pattern instanceof RegExp)) throw Error('expected a string and a RegExp');
+        return check(matches(actual,pattern),'expected regular expression match');
+      },
+      a: type => {
+        if (typeof type !== 'string') throw Error('expected a type name');
+        const kind = actual === null ? 'null' : Object.prototype.toString.call(actual).slice(8,-1).toLowerCase();
+        return check(kind === type.toLowerCase(),'expected type ' + type);
+      },
+      property: function(key,value) {
+        if (!['string','number','symbol'].includes(typeof key)) throw Error('expected a property name');
+        const exists = has(key);
+        check(exists && (arguments.length < 2 || equal(actual[key],value)), 'expected property ' + String(key));
+        return exists ? expect(actual[key]) : chain(negate,deep,own);
+      },
+      throw: (errorType,message) => {
+        if (typeof actual !== 'function') throw Error('expected a function');
+        if (typeof errorType === 'string' || errorType instanceof RegExp) {message = errorType; errorType = undefined;}
+        if (errorType !== undefined && typeof errorType !== 'function' && !(errorType instanceof Error)) throw Error('expected an error constructor or instance');
+        if (message !== undefined && typeof message !== 'string' && !(message instanceof RegExp)) throw Error('expected an error message or RegExp');
+        let caught, threw = false;
+        try { actual(); } catch (error) {caught = error; threw = true;}
+        const text = caught != null && caught.message !== undefined ? String(caught.message) : String(caught);
+        const correctType = errorType === undefined || (threw && (typeof errorType === 'function' ? caught instanceof errorType : caught === errorType));
+        const correctMessage = message === undefined || (typeof message === 'string' ? text.includes(message) : matches(text,message));
+        check(threw && correctType && correctMessage,'expected function to throw matching error');
+        return expect(caught);
       }
     };
     api.equals = api.eq = api.equal; api.contain = api.includes = api.include; api.an = api.a;
+    api.greaterThan = api.gt = api.above; api.lessThan = api.lt = api.below;
+    api.greaterThanOrEqual = api.gte = api.least; api.lessThanOrEqual = api.lte = api.most;
+    api.length = api.lengthOf; api.matches = api.match; api.throws = api.Throw = api.throw;
     return new Proxy(api,{get:(target,key) => {
-      if (['to','be','been','have','with','and','is','that','which'].includes(key)) return chain(negate,deep);
-      if (key === 'not') return chain(!negate,deep);
-      if (key === 'deep') return chain(negate,true);
+      // Assertion chains are synchronous, not thenables.
+      if (key === 'then') return undefined;
+      if (['to','be','been','have','has','with','and','is','that','which','at','of','same','but','does','still','also'].includes(key)) return chain(negate,deep,own);
+      if (key === 'not') return chain(!negate,deep,own);
+      if (key === 'deep') return chain(negate,true,own);
+      if (key === 'own') return chain(negate,deep,true);
+      if (key === 'empty') {
+        let empty;
+        if (typeof actual === 'string' || Array.isArray(actual)) empty = actual.length === 0;
+        else if (actual !== null && typeof actual === 'object' &&
+          (Object.getPrototypeOf(actual) === Object.prototype || Object.getPrototypeOf(actual) === null)) empty = Object.keys(actual).length === 0;
+        else unsupported('empty assertion for this value type');
+        return check(empty,'expected empty value');
+      }
       const predicates = {ok:!!actual,true:actual === true,false:actual === false,null:actual === null,
-        undefined:actual === undefined,exist:actual != null,empty:actual != null && (actual.length === 0 || Object.keys(actual).length === 0)};
-      if (Object.hasOwn(predicates,key)) {check(predicates[key], 'expected ' + key); return chain(negate,deep);}
-      if (key in target) return target[key];
+        undefined:actual === undefined,NaN:Number.isNaN(actual),exist:actual != null};
+      if (Object.hasOwn(predicates,key)) return check(predicates[key], 'expected ' + key);
+      if (Object.hasOwn(target,key)) return target[key];
       throw Error('expect.' + String(key) + ' is not supported in Quinn');
     }});
   }

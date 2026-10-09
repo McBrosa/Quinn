@@ -213,6 +213,17 @@ Use `req` getters and setters for the URL, method, headers, and JSON/text bodies
 Use `res` getters or properties for the response status, body, headers, and timing.
 Use `test(name, callback)` with `expect` or `assert` for synchronous tests.
 Results appear with assertions in the desktop and CLI. Failures publish no new runtime variables.
+
+```javascript
+test('successful response', () => {
+  expect(res.status).to.be.at.least(200).and.at.most(299);
+  expect(res.getBody().items).to.have.lengthOf(2);
+  expect(res.getBody()).to.deep.include({ready: true});
+});
+```
+
+The assertion subset also supports property values, RegExp matches, and thrown errors.
+Deep comparisons support JSON-shaped objects and arrays, not all JavaScript types.
 Node modules, host IO, timers, persistence, environment mutation, and runner-control APIs are not exposed.
 Promise-based operations and asynchronous tests are unsupported.
 Run only trusted local scripts: built-in operations and heap allocations do not have hard wall-clock or memory limits.

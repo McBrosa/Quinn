@@ -314,6 +314,127 @@ fn javascript_failed_tests_and_script_errors_preserve_responses_without_variable
 }
 
 #[test]
+fn javascript_common_chai_assertions_and_chaining_pass() {
+    let cases = [
+        "expect(200).to.be.at.least(200).and.at.most(299).and.above(199).and.below(300).and.within(200,299)",
+        "expect(2).gte(2).and.lte(2).and.gt(1).and.lt(3)",
+        "expect('quinn').to.have.lengthOf(5).and.include('uin').and.match(/^qui[n]+$/)",
+        "expect([1,2]).to.be.an('ARRAY').and.have.length(2).and.contain(2)",
+        "expect({b:[2,{d:4,c:3}],a:1}).to.deep.equal({a:1,b:[2,{c:3,d:4}]})",
+        "expect({a:undefined}).not.eql({})",
+        "expect([undefined]).not.eql([null])",
+        "expect([1,2]).not.eql([2,1])",
+        "expect({x:{b:2,a:1},extra:3}).to.deep.include({x:{a:1,b:2}})",
+        "expect([{b:2,a:1}]).to.deep.include({a:1,b:2})",
+        "expect([{x:1}]).not.include({x:1})",
+        "expect({a:1,b:2}).to.include({a:1}).and.not.include({a:2,b:2})",
+        "expect({x:undefined}).to.have.property('x',undefined)",
+        "expect({x:1}).not.have.property('x',2)",
+        "expect({x:1}).not.have.property('y',undefined)",
+        "expect({x:{a:1}}).to.have.deep.property('x',{a:1}).that.deep.equals({a:1})",
+        "expect({x:'hello'}).to.have.property('x').that.is.a('string').and.matches(/ell/)",
+        "expect(Object.create({x:1})).to.have.property('x',1).and.equal(1)",
+        "expect(Object.create({x:1})).not.have.own.property('x')",
+        "expect(Object.create({x:1})).to.include({x:1})",
+        "expect(() => {throw new TypeError('bad value');}).to.throw(TypeError,/bad/).with.property('message','bad value')",
+        "expect(() => {throw new Error('bad value');}).to.throw('value')",
+        "expect(() => {throw new Error('bad value');}).to.throw(/bad/)",
+        "expect(() => {}).not.to.throw()",
+        "expect(() => {throw new TypeError('bad');}).not.to.throw(ReferenceError,'bad')",
+        "const error = new Error('same'); expect(() => {throw error;}).to.throw(error)",
+        "const pattern = /foo/g; pattern.lastIndex = 1; expect('xfoo').to.match(pattern); expect(pattern.lastIndex).to.equal(1)",
+        "const a = {x:1}, b = {x:1}; a.self=a; b.self=b; expect(a).to.deep.equal(b)",
+        "expect(null).to.be.a('null'); expect(undefined).to.be.an('undefined'); expect(NaN).to.be.NaN",
+        "expect('').to.be.empty; expect([]).to.be.empty; expect({}).to.be.empty",
+    ];
+    let (url, handle) = server(vec![r#"{"ok":true}"#]);
+    let tests = cases
+        .iter()
+        .enumerate()
+        .map(|(index, script)| format!("test('case {index}', () => {{{script};}});\n"))
+        .collect::<String>();
+    let source = format!("get {{\n url: {url}\n}}\ntests {{\n {tests}\n}}\n");
+    let response = engine()
+        .send(&Document::parse(&source).unwrap(), &[], &Variables::new())
+        .unwrap();
+    handle.join().unwrap();
+    assert!(response.passed(), "{:?}", response.assertions);
+    assert_eq!(response.assertions.len(), cases.len());
+}
+
+#[test]
+fn javascript_failed_and_invalid_chai_assertions_are_recorded_without_variables() {
+    let cases = [
+        "expect(1).to.be.at.least(2)",
+        "expect(3).to.be.at.most(2)",
+        "expect(2).not.to.be.within(1,3)",
+        "expect('a').to.have.lengthOf(2)",
+        "expect([1,2]).not.to.have.lengthOf(2)",
+        "expect({a:1}).to.deep.equal({a:2})",
+        "expect({a:1}).not.to.deep.equal({a:1})",
+        "expect({a:[1,2]}).to.deep.include({a:[2,1]})",
+        "expect({a:1,b:2}).not.to.include({a:1,b:2})",
+        "expect({x:1}).to.have.property('x',undefined)",
+        "expect({}).to.have.property('x',undefined)",
+        "expect({x:1}).not.to.have.property('x',1)",
+        "expect({x:undefined}).not.to.have.property('x',undefined)",
+        "expect({x:{a:1}}).to.have.deep.property('x',{a:2})",
+        "expect('quinn').to.match(/^bruno$/)",
+        "expect('quinn').not.to.match(/^quinn$/)",
+        "expect(() => {}).to.throw()",
+        "expect(() => {throw new Error('bad');}).not.to.throw()",
+        "expect(() => {throw new TypeError('bad');}).to.throw(ReferenceError)",
+        "expect(() => {throw new TypeError('bad');}).to.throw(TypeError,'good')",
+        "expect('2').not.to.be.above(1)",
+        "expect(NaN).not.to.be.below(1)",
+        "expect(1).not.to.have.lengthOf(0)",
+        "expect('hello').not.to.match('hello')",
+        "expect(3).not.to.throw()",
+        "expect({a:1}).not.to.include(null)",
+        "expect(new Map()).not.to.include(1)",
+        "expect(new Date(0)).not.to.deep.equal(new Date(0))",
+        "expect({x:1}).not.to.have.property(undefined)",
+        "expect(1).to.have.members([1])",
+        "expect(1).not.to.be.empty",
+        "expect(new Map()).not.to.be.empty",
+    ];
+    let (url, handle) = server(vec![r#"{"ok":true}"#]);
+    let tests = cases
+        .iter()
+        .enumerate()
+        .map(|(index, script)| format!("test('case {index}', () => {{{script};}});\n"))
+        .collect::<String>();
+    let source = format!(
+        "get {{\n url: {url}\n}}\nscript:post-response {{\n bru.setVar('partial','secret');\n}}\ntests {{\n {tests}\n}}\n"
+    );
+    let response = engine()
+        .send(&Document::parse(&source).unwrap(), &[], &Variables::new())
+        .unwrap();
+    handle.join().unwrap();
+    assert_eq!(response.status, 200);
+    assert!(!response.passed());
+    assert!(response.variables.is_empty());
+    assert_eq!(response.assertions.len(), cases.len());
+    assert!(
+        response
+            .assertions
+            .iter()
+            .all(|assertion| !assertion.passed),
+        "{:?}",
+        response.assertions
+    );
+}
+
+#[test]
+fn javascript_deep_equality_retains_recursion_limits_before_network_io() {
+    let source = "get {\n url: http://127.0.0.1:9\n}\nscript:pre-request {\n let a={},b={},x=a,y=b;\n for(let i=0;i<256;i++){x=x.next={};y=y.next={};}\n expect(a).to.deep.equal(b);\n}\n";
+    let error = engine()
+        .send(&Document::parse(source).unwrap(), &[], &Variables::new())
+        .unwrap_err();
+    assert!(error.to_string().contains("script:pre-request"), "{error}");
+}
+
+#[test]
 fn javascript_limits_and_unsupported_apis_fail_before_network_io() {
     for script in [
         "while (true) {}",

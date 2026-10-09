@@ -318,8 +318,17 @@ and `getResponseTime`. Corresponding `status`, `body`, `headers`, and `responseT
 properties are also available. JSON response bodies are parsed; other bodies remain strings.
 
 `test(name, callback)` records synchronous callback success or failure.
-The `expect` subset includes equality, deep equality, inclusion, numeric ranges,
-type checks, properties, `not`, and boolean/existence predicates.
+The `expect` subset includes equality, JSON deep equality, string/array/object inclusion,
+numeric comparisons (`above`, `below`, `least`, `most`, `within`), `lengthOf`,
+RegExp `match`, type checks, properties, `not`, and boolean/existence predicates.
+Assertions support fluent chains and common comparison aliases.
+Deep equality compares object fields without regard to insertion order. Array order remains significant.
+Deep inclusion and property values also use structural equality.
+Property checks include inherited fields unless the chain uses `own`.
+`property(key, undefined)` checks the value and requires that the field exists.
+`throw` supports error constructors, error instances, message strings, and RegExp patterns.
+Non-JSON objects in deep comparisons, collection inclusion, nested property paths,
+and other Chai extensions remain unsupported. Unsupported assertion methods fail explicitly.
 `assert`, `assert.equal`, `assert.deepEqual`, `assert.isTrue`, and `assert.isFalse`
 are supported. This is not a complete Chai implementation.
 Unknown APIs fail explicitly. Dynamic code generation (`eval`, `Function`), Node modules, host IO, timers, console logging,
