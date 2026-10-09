@@ -10,7 +10,9 @@ use quinn_api::{
 const METHODS: &[&str] = &[
     "get", "post", "put", "patch", "delete", "head", "options", "connect", "trace", "http",
 ];
-const AUTH: &[&str] = &["none", "inherit", "basic", "bearer", "apikey", "oauth2"];
+const AUTH: &[&str] = &[
+    "none", "inherit", "basic", "digest", "bearer", "apikey", "oauth2",
+];
 const BODIES: &[(&str, &str)] = &[
     ("none", ""),
     ("json", "body:json"),
@@ -66,6 +68,7 @@ impl RequestForm {
             "params:query",
             "params:path",
             "auth:basic",
+            "auth:digest",
             "auth:bearer",
             "auth:apikey",
             "auth:oauth2",
@@ -220,7 +223,7 @@ impl RequestForm {
                 if self.auth != previous_auth {
                     let name = format!("auth:{}", self.auth);
                     let fields: &[(&str, &str)] = match self.auth.as_str() {
-                        "basic" => &[("username", ""), ("password", "")],
+                        "basic" | "digest" => &[("username", ""), ("password", "")],
                         "bearer" => &[("token", "")],
                         "apikey" => &[("key", ""), ("value", ""), ("placement", "header")],
                         "oauth2" => &[
@@ -241,10 +244,13 @@ impl RequestForm {
                         }));
                     }
                 }
-                if matches!(self.auth.as_str(), "basic" | "bearer" | "apikey" | "oauth2") {
+                if matches!(
+                    self.auth.as_str(),
+                    "basic" | "digest" | "bearer" | "apikey" | "oauth2"
+                ) {
                     let name = format!("auth:{}", self.auth);
                     ui.label(match self.auth.as_str() {
-                        "basic" => "Fields: username, password. Use {{variables}} for secrets.",
+                        "basic" | "digest" => "Fields: username, password. Use {{variables}} for secrets.",
                         "bearer" => "Field: token. Use {{variables}} for secrets.",
                         "apikey" => "Fields: key, value, placement (header or queryparams).",
                         _ => "Use Bruno OAuth field names. Configure supported grants in COMPATIBILITY.md.",
@@ -374,6 +380,27 @@ fn invalid(reason: impl Into<String>) -> Error {
 mod tests {
     use super::RequestForm;
     use quinn_api::{Result, bru::Document};
+
+    #[test]
+    fn digest_fields_roundtrip_without_replacing_other_source() -> Result<()> {
+        let source = "get {\n  url: https://example.com\n  auth: digest\n}\nauth:digest {\n  username: user\n  password: {{secret}}\n}\nscript:pre-request {\n  bru.setVar('x', 'y');\n}\n";
+        let mut form = RequestForm::parse(source)?;
+        assert_eq!(form.apply()?, source);
+        let pairs = form
+            .pairs
+            .get_mut("auth:digest")
+            .ok_or_else(|| super::invalid("missing Digest fields"))?;
+        pairs[0].value = "new-user".into();
+        let updated = form.apply()?;
+        assert_eq!(
+            Document::parse(&updated)?
+                .value("auth:digest", "username")?
+                .as_deref(),
+            Some("new-user")
+        );
+        assert!(updated.ends_with("script:pre-request {\n  bru.setVar('x', 'y');\n}\n"));
+        Ok(())
+    }
 
     #[test]
     fn form_noop_and_edits_preserve_scripts_unknown_fields_and_uploads() -> Result<()> {

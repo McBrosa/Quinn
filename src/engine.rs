@@ -2,6 +2,7 @@ use std::{
     collections::BTreeMap,
     io::Read,
     path::Path,
+    sync::Arc,
     time::{Duration, Instant},
 };
 
@@ -17,6 +18,7 @@ use serde_json::Value;
 use crate::{
     Error, Result,
     bru::{Document, Pair},
+    digest,
     network::NetworkOptions,
     oauth::{TokenCache, TokenRequest},
     scripts,
@@ -54,6 +56,7 @@ pub struct Assertion {
 pub struct Engine {
     client: Client,
     token_client: Client,
+    digest_client: Client,
     timeout: Duration,
     custom_network: bool,
     token_cache: TokenCache,
@@ -75,9 +78,10 @@ impl Engine {
         } else {
             reqwest::redirect::Policy::limited(options.max_redirects)
         };
+        let cookies = Arc::new(reqwest::cookie::Jar::default());
         let client = prepared
             .builder(timeout)
-            .cookie_store(true)
+            .cookie_provider(cookies.clone())
             .user_agent(concat!("Quinn/", env!("CARGO_PKG_VERSION")))
             .redirect(redirects)
             .build()
@@ -87,9 +91,17 @@ impl Engine {
             .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(Error::http)?;
+        let digest_client = prepared
+            .builder(timeout)
+            .cookie_provider(cookies)
+            .user_agent(concat!("Quinn/", env!("CARGO_PKG_VERSION")))
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .map_err(Error::http)?;
         Ok(Self {
             client,
             token_client,
+            digest_client,
             timeout,
             custom_network: options.is_custom(),
             token_cache: TokenCache::default(),
@@ -220,8 +232,13 @@ impl Engine {
                 headers.insert(name, value);
             }
         }
-        let mut builder = self.client.request(method, url);
         let (auth_document, auth) = resolve_auth(request, &block.name, defaults)?;
+        let client = if auth == "digest" {
+            &self.digest_client
+        } else {
+            &self.client
+        };
+        let mut builder = client.request(method, url.clone());
         let auth_value = |key: &str| -> Result<String> {
             let value = auth_document
                 .value(&format!("auth:{auth}"), key)?
@@ -229,12 +246,31 @@ impl Engine {
             interpolate(&value, &all_variables)
         };
         let mut oauth = None;
+        let mut digest = None;
         match auth.as_str() {
             "none" => {}
             "basic" => {
                 builder = builder.basic_auth(auth_value("username")?, Some(auth_value("password")?))
             }
             "bearer" => builder = builder.bearer_auth(auth_value("token")?),
+            "digest" => {
+                if headers.contains_key(AUTHORIZATION)
+                    || !url.username().is_empty()
+                    || url.password().is_some()
+                {
+                    return Err(Error::invalid(
+                        "Digest auth cannot combine with an Authorization header or URL credentials",
+                    ));
+                }
+                for pair in auth_document.pairs("auth:digest")? {
+                    if pair.enabled && !matches!(pair.key.as_str(), "username" | "password") {
+                        return Err(Error::Unsupported {
+                            feature: format!("Digest field '{}'", pair.key),
+                        });
+                    }
+                }
+                digest = Some((auth_value("username")?, auth_value("password")?));
+            }
             "oauth2" => oauth = Some(TokenRequest::prepare(auth_document, &all_variables)?),
             "apikey" => {
                 let key = auth_value("key")?;
@@ -264,6 +300,16 @@ impl Engine {
         let body_type = request
             .value(&block.name, "body")?
             .unwrap_or_else(|| "none".into());
+        if digest.is_some()
+            && matches!(
+                body_type.as_str(),
+                "file" | "multipartForm" | "multipart-form"
+            )
+        {
+            return Err(Error::Unsupported {
+                feature: "Digest authentication with streaming file or multipart bodies".into(),
+            });
+        }
         match body_type.as_str() {
             "none" => {}
             "json" | "text" | "xml" | "sparql" => {
@@ -374,7 +420,17 @@ impl Engine {
             );
         }
         let start = Instant::now();
-        let mut raw_response = builder.send().map_err(Error::http)?;
+        let mut raw_response = if let Some((username, password)) = digest {
+            digest::send(
+                &self.digest_client,
+                builder.build().map_err(Error::http)?,
+                &username,
+                &password,
+                self.timeout,
+            )?
+        } else {
+            builder.send().map_err(Error::http)?
+        };
         let status = raw_response.status().as_u16();
         let headers = raw_response
             .headers()
@@ -470,6 +526,7 @@ fn validate(document: &Document) -> Result<()> {
                     | "headers"
                     | "auth"
                     | "auth:basic"
+                    | "auth:digest"
                     | "auth:bearer"
                     | "auth:apikey"
                     | "auth:oauth2"

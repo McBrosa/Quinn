@@ -28,6 +28,7 @@ eframe = { version = "0.36.2", optional = true, default-features = false, featur
 futures-util = { version = "0.3", features = ["sink"] }
 getrandom = "0.4"
 http = "1"
+md-5 = "0.10"
 percent-encoding = "2.3"
 prost = "0.14"
 prost-types = "0.14"

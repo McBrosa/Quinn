@@ -102,6 +102,41 @@ The nearest `auth { mode: ... }` block supplies the mode and credentials.
 Supported modes are `none`, `basic`, `bearer`, `apikey`, and `oauth2`.
 API keys support `header` and `queryparams` placement.
 
+## HTTP Digest authentication
+
+```bru
+get {
+  url: https://example.com/protected
+  auth: digest
+}
+
+auth:digest {
+  username: {{username}}
+  password: {{password}}
+}
+```
+
+Digest uses Bruno's `username` and `password` fields, including variables and inherited authentication.
+Native Forms provide the same fields. Quinn sends the original request without Digest credentials and handles one `401` challenge.
+It sends no extra `HEAD` probe. After a supported challenge, it repeats the original method, URL, headers, and buffered body once.
+Servers must authenticate requests before they perform application actions. The challenge exchange can send a body twice.
+
+The [Digest standard](https://www.rfc-editor.org/rfc/rfc7616) defines the challenge and response calculation.
+Quinn supports `MD5` and `SHA-256`, with `qop=auth` or legacy challenges without `qop`.
+An offered `auth,auth-int` list selects `auth`. Quinn rejects `auth-int`-only challenges, session algorithms, unsupported algorithms, and username hashing.
+Usernames and challenge header text must be ASCII. Non-ASCII passwords require the server's `charset=UTF-8` challenge parameter.
+Quoted commas and escaped quotes are supported. Duplicate challenge parameters fail instead of silently replacing values.
+Multiple Digest challenges and combined authentication schemes in one header are not supported.
+
+Digest requests never follow redirects, including same-origin redirects, regardless of the session redirect limit.
+The request and retry share one timeout. The retry uses the same proxy, certificate configuration, and cookie store as normal HTTP requests.
+Explicit `Authorization` headers and URL credentials cannot combine with Digest authentication.
+File and multipart bodies fail before network access because Quinn cannot safely clone their streamed content.
+JSON, text, XML, SPARQL, GraphQL, URL-encoded forms, and requests without bodies can repeat their buffered content.
+Challenge caching, stale-nonce retries, proxy Digest authentication, and `Authentication-Info` verification are not implemented.
+The final response remains available for normal assertions, scripts, and response-variable extraction.
+Digest does not replace TLS. Use HTTPS for real credentials.
+
 ## OAuth 2 client credentials
 
 Quinn supports the [client-credentials grant](https://www.rfc-editor.org/rfc/rfc6749#section-4.4).
@@ -482,7 +517,8 @@ Custom configuration for gRPC and WebSockets, per-host certificates, and desktop
 | Desktop request forms, tabs, syntax highlighting | HTTP forms and Source tabs. Syntax highlighting and protocol-specific forms remain unfinished. |
 | JavaScript scripts and tests | Embedded synchronous subset; Node APIs, async jobs, full Chai, and runner control remain unfinished |
 | OAuth | Client credentials and browser authorization code with PKCE S256 and loopback redirects. In-memory expiry-aware token caching and refresh-token rotation. No persistent token store or automatic API replay. |
-| OAuth 1, AWS SigV4, digest, NTLM, WSSE | Not implemented |
+| HTTP Digest | MD5/SHA-256 auth or no-qop challenges, one buffered-body retry, no redirects. File/multipart replay and extended algorithms remain unsupported. |
+| OAuth 1, AWS SigV4, NTLM, WSSE | Not implemented |
 | Multipart requests and binary uploads | Streamed file uploads. Custom boundaries remain unfinished. |
 | gRPC and WebSockets | Unary and finite streaming RPCs with local protobuf files or server reflection, plus one-shot WebSocket exchange. Interactive sessions remain unfinished. |
 | OpenAPI, Postman, Insomnia, and cURL import/export | Offline Postman v2.1, OpenAPI 3 JSON/YAML, and cURL imports. Insomnia and exports remain unfinished. |

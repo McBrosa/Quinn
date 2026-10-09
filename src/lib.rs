@@ -9,6 +9,7 @@ pub mod variables;
 
 pub use error::{Error, Result};
 
+mod digest;
 mod oauth;
 mod oauth_interactive;
 mod opencollection;
