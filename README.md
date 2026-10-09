@@ -1,11 +1,12 @@
 # Quinn
 
 Quinn is a native Rust API client with a desktop app and CLI.
-It reads local Bruno `.bru` collections and sends REST, GraphQL, finite gRPC streams, and one-shot WebSocket requests.
+It reads local Bruno `.bru` collections and OpenCollection YAML HTTP collections.
+It sends REST, GraphQL, unary and finite streaming gRPC, and one-shot WebSocket requests.
 Collections stay on your filesystem and work with Git.
 
 This is an initial port of [Bruno](https://github.com/usebruno/bruno), not a complete replacement.
-The desktop provides request forms and a lossless `.bru` source editor.
+The desktop provides `.bru` request forms and a lossless source editor for `.bru` and YAML requests.
 See [COMPATIBILITY.md](COMPATIBILITY.md) for supported features and remaining work.
 
 ## Run the desktop app
@@ -25,7 +26,7 @@ Forms provide method, URL, headers, query/path parameters, authentication, and b
 Save and Send apply pending form changes. **Apply form changes** updates Source without saving.
 Apply or discard form drafts before editing Source.
 Send uses the current editor contents, including unsaved edits.
-Save writes the request to its original `.bru` file.
+Save writes the request to its original file without changing its format.
 
 Use `Cmd/Ctrl+Enter` to send and `Cmd/Ctrl+S` to save.
 Quinn asks before discarding unsaved edits.

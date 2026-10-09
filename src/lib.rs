@@ -11,6 +11,7 @@ pub use error::{Error, Result};
 
 mod oauth;
 mod oauth_interactive;
+mod opencollection;
 mod protocols;
 mod scripts;
 mod selectors;

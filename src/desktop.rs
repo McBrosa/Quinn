@@ -14,7 +14,6 @@ use eframe::egui::{
 };
 use quinn_api::{
     Result,
-    bru::Document,
     collection::{self, Entry},
     engine::{Engine, Response},
     variables::Variables,
@@ -187,6 +186,9 @@ impl Quinn {
     fn load_request(&mut self, path: PathBuf) {
         match collection::read(&path) {
             Ok(source) => {
+                if path.extension().is_some_and(|extension| extension == "yml") {
+                    self.forms_tab = false;
+                }
                 self.original = source.clone();
                 self.source = source;
                 self.form = None;
@@ -227,7 +229,6 @@ impl Quinn {
             return;
         }
         let prepared = (|| {
-            let request = Document::parse(&self.source)?;
             let root = self
                 .root
                 .as_ref()
@@ -240,6 +241,7 @@ impl Quinn {
                 .ok_or_else(|| quinn_api::Error::Invalid {
                     reason: "select a request first".into(),
                 })?;
+            let request = collection::parse(path, &self.source)?;
             let defaults = collection::defaults(root, path)?;
             let mut variables = if self.environment.is_empty() {
                 Variables::new()
@@ -311,11 +313,23 @@ impl Quinn {
         let Some(root) = &self.root else {
             return;
         };
-        let path = root.join(format!("{name}.bru"));
-        let source = format!(
-            "meta {{\n  name: {name}\n  type: http\n  seq: {}\n}}\n\nget {{\n  url: https://httpbin.org/get\n  body: none\n  auth: none\n}}\n",
-            self.entries.len() + 1
-        );
+        let yaml = collection::is_yaml(root);
+        let path = root.join(format!("{name}.{}", if yaml { "yml" } else { "bru" }));
+        let source = if yaml {
+            let value = serde_json::json!({"info":{"name":name,"type":"http","seq":self.entries.len()+1},"http":{"method":"GET","url":"https://httpbin.org/get"}});
+            match serde_yaml_ng::to_string(&value) {
+                Ok(source) => source,
+                Err(error) => {
+                    self.error = error.to_string();
+                    return;
+                }
+            }
+        } else {
+            format!(
+                "meta {{\n  name: {name}\n  type: http\n  seq: {}\n}}\n\nget {{\n  url: https://httpbin.org/get\n  body: none\n  auth: none\n}}\n",
+                self.entries.len() + 1
+            )
+        };
         let result = OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -526,13 +540,24 @@ impl Quinn {
             });
         });
         ui.horizontal(|ui| {
-            ui.selectable_value(&mut self.forms_tab, true, "Forms");
+            let yaml = self
+                .selected
+                .as_ref()
+                .is_some_and(|path| path.extension().is_some_and(|extension| extension == "yml"));
+            if yaml {
+                self.forms_tab = false;
+                ui.label("YAML requests use the Source editor.");
+            } else {
+                ui.selectable_value(&mut self.forms_tab, true, "Forms");
+            }
             ui.selectable_value(&mut self.forms_tab, false, "Source");
-            ui.label(
-                RichText::new("Send and Save apply form changes.")
-                    .small()
-                    .weak(),
-            );
+            if !yaml {
+                ui.label(
+                    RichText::new("Send and Save apply form changes.")
+                        .small()
+                        .weak(),
+                );
+            }
         });
         ui.add_space(8.0);
         ScrollArea::vertical()

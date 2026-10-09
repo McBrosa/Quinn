@@ -1,7 +1,7 @@
 use std::{path::PathBuf, process::ExitCode, time::Duration};
 
 use clap::{Args as ClapArgs, Parser, Subcommand, ValueEnum};
-use quinn_api::{Error, Result, bru::Document, collection, engine::Engine, variables::Variables};
+use quinn_api::{Error, Result, collection, engine::Engine, variables::Variables};
 
 #[cfg(feature = "desktop")]
 mod desktop;
@@ -41,7 +41,7 @@ enum Command {
     Run {
         #[arg(default_value = ".")]
         path: PathBuf,
-        /// Bruno environment name from environments/NAME.bru.
+        /// Bruno environment name from environments/NAME.bru or NAME.yml.
         #[arg(short, long)]
         env: Option<String>,
         /// Override an environment variable. Repeat for multiple variables.
@@ -185,7 +185,7 @@ fn run(args: Args) -> Result<bool> {
             Ok(true)
         }
         Command::Inspect { path } => {
-            let document = Document::parse(&collection::read(&path)?)?;
+            let document = collection::load(&path)?;
             for block in document.blocks {
                 println!("{} (line {})", block.name, block.line);
             }
@@ -223,7 +223,7 @@ fn run(args: Args) -> Result<bool> {
                     std::thread::sleep(Duration::from_millis(delay));
                 }
                 let result = (|| {
-                    let document = Document::parse(&collection::read(&entry.path)?)?;
+                    let document = collection::load(&entry.path)?;
                     let defaults = collection::defaults(&root, &entry.path)?;
                     engine.send_in(&document, &defaults, &values, &root)
                 })();

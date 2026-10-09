@@ -13,8 +13,10 @@ It reads `environments/NAME.bru` for environment variables.
 It excludes environments, Git directories, and `node_modules` from request discovery.
 Directory discovery does not follow symbolic links.
 
-Requests run by folder path, then numeric `meta.seq`, then file path.
-This ordering is deterministic but does not reproduce Bruno's complete folder sequencing behavior.
+Discovery uses Bruno's CLI folders-first traversal. Unsequenced folders start in filename order.
+Positive folder sequences insert folders at their one-based positions. Equal sequences retain filename order.
+Each folder runs recursively before requests in its parent directory. Requests use numeric `meta.seq`, then filename order.
+Filename comparisons use Unicode lexical order, not a machine-dependent locale.
 The desktop keeps the original source until the user edits it.
 
 Forms patch only changed fields and blocks. Untouched entries, comments, scripts,
@@ -34,6 +36,30 @@ Bruno block terminators must start in column one.
 Text inside body blocks can contain indented nested braces.
 Inline upload annotations are supported.
 Dictionary decorators are not supported.
+
+## OpenCollection YAML
+
+Quinn reads directory-based OpenCollection 1.0.0 files: `opencollection.yml`, `folder.yml`, request `.yml` files, and `environments/NAME.yml`.
+If `opencollection.yml` exists, discovery ignores old `.bru` copies. Explicitly running an old copy returns an error.
+The desktop opens YAML in the Source editor. Send converts supported fields in memory.
+Save preserves the exact YAML source, including comments. New requests use the collection's format.
+Discovery validates YAML syntax and request metadata. Save validates YAML syntax, not executable feature support.
+Unsupported requests remain available for Source editing. Send, Run, and export validate the full execution model.
+Atomic saves still reject external file changes. Symlink requests, metadata, and environments are not followed.
+
+Supported YAML HTTP fields include methods, URLs, headers, query/path parameters, basic/bearer/API-key authentication, inherited defaults, and scalar variables.
+Bodies include JSON, text, XML, SPARQL, URL-encoded forms, multipart text/files, and binary files.
+Runtime fields include synchronous scripts/tests, assertions, and runtime-scope response-variable actions.
+File-based and embedded environments support scalar variables, disabled entries, and parent inheritance through `extends`.
+
+Secret storage, typed variables, YAML GraphQL/gRPC/WebSocket requests, inline collection `items`, body variants, and OAuth authentication are not supported yet.
+Unknown executable fields return errors. Custom YAML tags, duplicate mapping keys, non-string mapping keys, and dictionary values with triple quotes also return errors.
+
+Harmless request settings are accepted only at these values: `encodeUrl: true`, `timeout: 0` or null, `followRedirects: true`, `maxRedirects: 10`, `forwardAuthorizationHeader: false`, and empty `omitHeaders`.
+The CLI's timeout and network options remain authoritative. Other request settings and embedded network configuration return errors.
+Bruno's `forwardAuthorizationHeader: true` does not match Quinn's cross-origin credential protection and returns an error.
+Custom ignore patterns and custom script-flow configuration also return errors.
+Metadata descriptions, tags, examples, presets, and OpenAPI sync metadata do not execute.
 
 ## Variables and inheritance
 
