@@ -43,6 +43,7 @@ fn server_with_status(
                     Err(error) => panic!("cannot accept test connection: {error}"),
                 }
             };
+            socket.set_nonblocking(false).unwrap();
             socket
                 .set_read_timeout(Some(Duration::from_secs(5)))
                 .unwrap();
@@ -359,8 +360,9 @@ fn cli_chains_response_variables_and_preserves_explicit_overrides() {
         let output = command.output().unwrap();
         assert!(
             output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
+            "{} {}",
+            String::from_utf8_lossy(&output.stderr),
+            String::from_utf8_lossy(&output.stdout)
         );
         let requests = server.join().unwrap();
         let token = if explicit { "explicit" } else { "extracted" };
