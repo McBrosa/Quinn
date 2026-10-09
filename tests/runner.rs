@@ -187,6 +187,60 @@ fn existing_report_destinations_fail_before_network_or_overwrite() {
             std::io::ErrorKind::WouldBlock
         );
     }
+    #[cfg(unix)]
+    {
+        let link = directory.path().join("report-link.json");
+        std::os::unix::fs::symlink(&destination, &link).unwrap();
+        let output = Command::new(env!("CARGO_BIN_EXE_quinn"))
+            .arg("run")
+            .arg(directory.path())
+            .arg("--reporter-json")
+            .arg(&link)
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("already exists"));
+        assert!(
+            fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(fs::read_to_string(&destination).unwrap(), "user data");
+        assert_eq!(
+            listener.accept().unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock
+        );
+    }
+}
+
+#[test]
+fn second_report_reservation_failure_prevents_requests() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let directory = collection(&format!(
+        "get {{\n  url: http://{}\n}}\n",
+        listener.local_addr().unwrap()
+    ));
+    let first = directory.path().join("results.json");
+    let second = directory.path().join("missing-parent/results.xml");
+    let output = Command::new(env!("CARGO_BIN_EXE_quinn"))
+        .arg("run")
+        .arg(directory.path())
+        .arg("--reporter-json")
+        .arg(&first)
+        .arg("--reporter-junit")
+        .arg(&second)
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    assert_eq!(fs::read(&first).unwrap(), b"");
+    assert!(!second.exists());
+    assert_eq!(
+        listener.accept().unwrap_err().kind(),
+        std::io::ErrorKind::WouldBlock
+    );
 }
 
 #[test]
