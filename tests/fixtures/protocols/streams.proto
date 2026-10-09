@@ -1,0 +1,9 @@
+syntax = "proto3";
+package quinn.stream;
+import "echo.proto";
+service Streams {
+  rpc Unary(quinn.test.Echo) returns (quinn.test.Echo);
+  rpc Server(quinn.test.Echo) returns (stream quinn.test.Echo);
+  rpc Client(stream quinn.test.Echo) returns (quinn.test.Echo);
+  rpc Bidi(stream quinn.test.Echo) returns (stream quinn.test.Echo);
+}

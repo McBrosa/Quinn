@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fs,
     future::Future,
     io::Read,
@@ -11,7 +11,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 use futures_util::{SinkExt, StreamExt};
 use http::{HeaderName, HeaderValue, uri::PathAndQuery};
 use prost::Message as _;
-use prost_reflect::{DescriptorPool, DynamicMessage, MessageDescriptor};
+use prost_reflect::{DescriptorPool, DynamicMessage, MessageDescriptor, MethodDescriptor};
 use reqwest::Url;
 use serde_json::Value;
 use tokio_tungstenite::tungstenite::{
@@ -33,6 +33,8 @@ use crate::{
 };
 
 const MAX_MESSAGE_BYTES: usize = 16 * 1024 * 1024;
+const MAX_STREAM_MESSAGES: usize = 1024;
+const MAX_DESCRIPTOR_FILES: usize = 1024;
 
 pub(crate) fn send(
     request: &Document,
@@ -145,7 +147,10 @@ fn validate(document: &Document, protocol: &str) -> Result<()> {
     for pair in document.pairs(protocol)? {
         let supported = matches!(pair.key.as_str(), "url" | "body" | "auth")
             || (protocol == "grpc"
-                && matches!(pair.key.as_str(), "method" | "methodType" | "descriptor"));
+                && matches!(
+                    pair.key.as_str(),
+                    "method" | "methodType" | "descriptor" | "protoPath"
+                ));
         if pair.enabled && !supported {
             return Err(Error::Unsupported {
                 feature: format!("{protocol} request field '{}'", pair.key),
@@ -215,6 +220,16 @@ fn authorization(
 }
 
 fn payload(request: &Document, protocol: &str, values: &Variables) -> Result<Option<String>> {
+    let mut messages = payloads(request, protocol, values)?;
+    if messages.len() > 1 {
+        return Err(Error::Unsupported {
+            feature: format!("multiple {protocol} messages; send one message per request"),
+        });
+    }
+    Ok(messages.pop())
+}
+
+fn payloads(request: &Document, protocol: &str, values: &Variables) -> Result<Vec<String>> {
     let body_type = request
         .value(protocol, "body")?
         .unwrap_or_else(|| "none".into());
@@ -230,10 +245,10 @@ fn payload(request: &Document, protocol: &str, values: &Variables) -> Result<Opt
         .iter()
         .filter(|block| block.name == format!("body:{protocol}"))
         .collect();
-    if blocks.len() > 1 {
-        return Err(Error::Unsupported {
-            feature: format!("multiple {protocol} messages; send one message per request"),
-        });
+    if blocks.len() > MAX_STREAM_MESSAGES {
+        return Err(Error::invalid(
+            "protocol request exceeds the 1024 message limit",
+        ));
     }
     if body_type == "none" {
         if !blocks.is_empty() {
@@ -241,53 +256,61 @@ fn payload(request: &Document, protocol: &str, values: &Variables) -> Result<Opt
                 "message body is present but the request body mode is none",
             ));
         }
-        return Ok(None);
+        return Ok(Vec::new());
     }
-    let block = blocks
-        .first()
-        .ok_or_else(|| Error::invalid(format!("request has no body:{protocol} message")))?;
-    let mut content = None;
-    let mut kind = "text".to_owned();
-    for pair in block.pairs()? {
-        if !pair.enabled {
-            continue;
-        }
-        match pair.key.as_str() {
-            "name" => {}
-            "type" => kind = pair.value,
-            "content" => content = Some(interpolate(&pair.value, values)?),
-            _ => {
-                return Err(Error::Unsupported {
-                    feature: format!("{protocol} message field '{}'", pair.key),
-                });
+    if blocks.is_empty() {
+        return Err(Error::invalid(format!(
+            "request has no body:{protocol} message"
+        )));
+    }
+    let mut messages = Vec::new();
+    let mut bytes = 0usize;
+    for block in blocks {
+        let mut content = None;
+        let mut kind = "text".to_owned();
+        for pair in block.pairs()? {
+            if !pair.enabled {
+                continue;
+            }
+            match pair.key.as_str() {
+                "name" => {}
+                "type" => kind = pair.value,
+                "content" => content = Some(interpolate(&pair.value, values)?),
+                _ => {
+                    return Err(Error::Unsupported {
+                        feature: format!("{protocol} message field '{}'", pair.key),
+                    });
+                }
             }
         }
-    }
-    let content = content.ok_or_else(|| Error::invalid("message has no content"))?;
-    if content.len() > MAX_MESSAGE_BYTES {
-        return Err(Error::invalid("message exceeds the 16 MiB limit"));
-    }
-    if !matches!(kind.as_str(), "text" | "json") {
-        return Err(Error::Unsupported {
-            feature: format!("{protocol} message type '{kind}'"),
-        });
-    }
-    if protocol == "ws" {
-        match kind.as_str() {
-            "text" => {}
-            "json" => {
-                serde_json::from_str::<Value>(&content).map_err(|source| {
-                    Error::invalid(format!("invalid WebSocket JSON message: {source}"))
-                })?;
-            }
-            _ => {
-                return Err(Error::Unsupported {
-                    feature: format!("WebSocket message type '{kind}'"),
-                });
+        let content = content.ok_or_else(|| Error::invalid("message has no content"))?;
+        bytes = bytes.saturating_add(content.len());
+        if bytes > MAX_MESSAGE_BYTES {
+            return Err(Error::invalid("request messages exceed the 16 MiB limit"));
+        }
+        if !matches!(kind.as_str(), "text" | "json") {
+            return Err(Error::Unsupported {
+                feature: format!("{protocol} message type '{kind}'"),
+            });
+        }
+        if protocol == "ws" {
+            match kind.as_str() {
+                "text" => {}
+                "json" => {
+                    serde_json::from_str::<Value>(&content).map_err(|source| {
+                        Error::invalid(format!("invalid WebSocket JSON message: {source}"))
+                    })?;
+                }
+                _ => {
+                    return Err(Error::Unsupported {
+                        feature: format!("WebSocket message type '{kind}'"),
+                    });
+                }
             }
         }
+        messages.push(content);
     }
-    Ok(Some(content))
+    Ok(messages)
 }
 
 fn websocket(
@@ -413,14 +436,14 @@ fn grpc(
     auth: Option<String>,
     timeout: Duration,
 ) -> Result<Response> {
-    if request
+    let method_type = request
         .value("grpc", "methodType")?
-        .as_deref()
-        .is_some_and(|value| value != "unary")
-    {
-        return Err(Error::Unsupported {
-            feature: "streaming gRPC methods".into(),
-        });
+        .unwrap_or_else(|| "unary".into());
+    if !matches!(
+        method_type.as_str(),
+        "unary" | "server-streaming" | "client-streaming" | "bidi-streaming"
+    ) {
+        return Err(Error::invalid("invalid gRPC methodType"));
     }
     for document in documents {
         if !document.pairs("query")?.is_empty() || !document.pairs("params:query")?.is_empty() {
@@ -458,35 +481,23 @@ fn grpc(
         .filter(|(service, name)| !service.is_empty() && !name.is_empty() && !name.contains('/'))
         .ok_or_else(|| Error::invalid("gRPC method must be /package.Service/Method"))?;
     let pool = descriptors(request, values, root)?;
-    let descriptor = pool
-        .services()
-        .find(|descriptor| descriptor.full_name() == service)
-        .and_then(|service| {
-            service
-                .methods()
-                .find(|descriptor| descriptor.name() == name)
-        })
-        .ok_or_else(|| {
-            Error::invalid("gRPC method is not defined in the configured protobuf files")
-        })?;
-    if descriptor.is_client_streaming() || descriptor.is_server_streaming() {
-        return Err(Error::Unsupported {
-            feature: "streaming gRPC methods".into(),
-        });
+    let payloads = payloads(request, "grpc", values)?;
+    if payloads.is_empty()
+        || (!matches!(method_type.as_str(), "client-streaming" | "bidi-streaming")
+            && payloads.len() != 1)
+    {
+        return Err(Error::invalid(
+            "gRPC unary/server-streaming needs one message; client/bidi streaming needs 1 to 1024 messages",
+        ));
     }
-    let payload = payload(request, "grpc", values)?
-        .ok_or_else(|| Error::invalid("gRPC unary request needs a body:grpc message"))?;
-    let mut json = serde_json::Deserializer::from_str(&payload);
-    let message = DynamicMessage::deserialize(descriptor.input(), &mut json)
-        .map_err(|source| Error::invalid(format!("invalid protobuf JSON request: {source}")))?;
-    json.end()
-        .map_err(|source| Error::invalid(format!("invalid protobuf JSON request: {source}")))?;
-    if message.encoded_len() > MAX_MESSAGE_BYTES {
-        return Err(Error::invalid("protobuf message exceeds the 16 MiB limit"));
+    // Validate JSON before connecting even when descriptors must come from reflection.
+    for payload in &payloads {
+        serde_json::from_str::<Value>(payload)
+            .map_err(|source| Error::invalid(format!("invalid protobuf JSON request: {source}")))?;
     }
     let metadata = metadata(documents, values, auth)?;
-    let path =
-        PathAndQuery::try_from(method).map_err(|_| Error::invalid("invalid gRPC method path"))?;
+    let path = PathAndQuery::try_from(method.clone())
+        .map_err(|_| Error::invalid("invalid gRPC method path"))?;
     let mut endpoint = Endpoint::from_shared(url)
         .map_err(|_| Error::invalid("invalid gRPC endpoint"))?
         .connect_timeout(timeout)
@@ -496,35 +507,103 @@ fn grpc(
             .tls_config(ClientTlsConfig::new().with_native_roots())
             .map_err(transport)?;
     }
-    let codec = DynamicCodec {
-        output: descriptor.output(),
-    };
+    let service = service.to_owned();
+    let name = name.to_owned();
+    let prepared = pool
+        .map(|pool| prepare_messages(&pool, &service, &name, &method_type, &payloads))
+        .transpose()?;
     bounded(timeout, async move {
         let channel = endpoint
             .connect()
             .await
             .map_err(|source| transport(format!("gRPC connection failed: {source}")))?;
+        let (descriptor, messages) = if let Some(prepared) = prepared {
+            prepared
+        } else {
+            let pool =
+                reflected_descriptors(channel.clone(), &service, metadata.clone(), timeout).await?;
+            prepare_messages(&pool, &service, &name, &method_type, &payloads)?
+        };
+        let codec = DynamicCodec {
+            output: descriptor.output(),
+        };
         let mut client = tonic::client::Grpc::new(channel)
             .max_decoding_message_size(MAX_MESSAGE_BYTES)
             .max_encoding_message_size(MAX_MESSAGE_BYTES);
         client.ready().await.map_err(transport)?;
-        let mut request = tonic::Request::new(message);
+        let mut request = tonic::Request::new(futures_util::stream::iter(messages));
         *request.metadata_mut() = metadata;
         request.set_timeout(timeout);
-        match client.unary(request, path, codec).await {
+        match client.streaming(request, path, codec).await {
             Ok(reply) => {
                 let mut headers = response_metadata(reply.metadata());
-                headers.insert("grpc-status".into(), "0".into());
-                let body = serde_json::to_string(reply.get_ref()).map_err(|source| {
-                    Error::invalid(format!("cannot encode protobuf JSON response: {source}"))
-                })?;
-                if body.len() > MAX_MESSAGE_BYTES {
-                    return Err(Error::invalid(
-                        "protobuf JSON response exceeds the 16 MiB limit",
-                    ));
+                let mut stream = reply.into_inner();
+                let mut messages = Vec::new();
+                let mut bytes = 0usize;
+                let mut json_bytes = 2usize;
+                let mut failure = None;
+                loop {
+                    match stream.message().await {
+                        Ok(Some(message)) => {
+                            if messages.len() == MAX_STREAM_MESSAGES {
+                                return Err(Error::invalid(
+                                    "gRPC response exceeds the 1024 message limit",
+                                ));
+                            }
+                            let json = serde_json::to_string(&message).map_err(|source| {
+                                Error::invalid(format!(
+                                    "cannot encode protobuf JSON response: {source}"
+                                ))
+                            })?;
+                            bytes = bytes.saturating_add(message.encoded_len());
+                            json_bytes = json_bytes
+                                .saturating_add(json.len() + usize::from(!messages.is_empty()));
+                            if bytes > MAX_MESSAGE_BYTES || json_bytes > MAX_MESSAGE_BYTES {
+                                return Err(Error::invalid(
+                                    "gRPC response exceeds the 16 MiB limit",
+                                ));
+                            }
+                            messages.push(json);
+                        }
+                        Ok(None) => break,
+                        Err(status) => {
+                            failure = Some(status);
+                            break;
+                        }
+                    }
                 }
-                let bytes = reply.get_ref().encoded_len();
-                Ok(response(200, headers, body, bytes))
+                if failure.is_none() {
+                    match stream.trailers().await {
+                        Ok(Some(trailers)) => headers.extend(response_metadata(&trailers)),
+                        Ok(None) => {}
+                        Err(status) => failure = Some(status),
+                    }
+                }
+                let status = if let Some(failure) = &failure {
+                    headers.extend(response_metadata(failure.metadata()));
+                    headers.insert("grpc-status".into(), (failure.code() as i32).to_string());
+                    headers.insert("grpc-message".into(), failure.message().to_owned());
+                    500
+                } else {
+                    headers.insert("grpc-status".into(), "0".into());
+                    200
+                };
+                let body = if descriptor.is_server_streaming() {
+                    format!("[{}]", messages.join(","))
+                } else if failure.is_some() {
+                    let failure = failure
+                        .as_ref()
+                        .ok_or_else(|| Error::invalid("missing gRPC failure"))?;
+                    serde_json::json!({"code":failure.code() as i32,"message":failure.message()})
+                        .to_string()
+                } else if messages.len() == 1 {
+                    messages.remove(0)
+                } else {
+                    return Err(Error::invalid(
+                        "gRPC unary/client-streaming response must contain exactly one message",
+                    ));
+                };
+                Ok(response(status, headers, body, bytes))
             }
             Err(status) => {
                 let mut headers = response_metadata(status.metadata());
@@ -540,24 +619,49 @@ fn grpc(
     })
 }
 
-fn descriptors(request: &Document, values: &Variables, root: &Path) -> Result<DescriptorPool> {
+fn descriptors(
+    request: &Document,
+    values: &Variables,
+    root: &Path,
+) -> Result<Option<DescriptorPool>> {
     if let Some(raw_path) = request.value("grpc", "descriptor")? {
         let path = root.join(interpolate(&raw_path, values)?);
         let bytes = read_limited(&path)?;
-        return DescriptorPool::decode(bytes.as_slice()).map_err(|source| {
-            Error::invalid(format!("invalid protobuf descriptor set: {source}"))
-        });
+        return DescriptorPool::decode(bytes.as_slice())
+            .map(Some)
+            .map_err(|source| {
+                Error::invalid(format!("invalid protobuf descriptor set: {source}"))
+            });
+    }
+    if let Some(path) = request.value("grpc", "protoPath")? {
+        let path = root.join(interpolate(&path, values)?);
+        let includes = [
+            root.to_path_buf(),
+            path.parent().unwrap_or(root).to_path_buf(),
+        ];
+        let descriptors = protox::compile([path], includes)
+            .map_err(|source| Error::invalid(format!("cannot compile protobuf files: {source}")))?;
+        return DescriptorPool::from_file_descriptor_set(descriptors)
+            .map(Some)
+            .map_err(|source| Error::invalid(format!("invalid protobuf descriptors: {source}")));
     }
     let path = root.join("bruno.json");
+    if !path
+        .try_exists()
+        .map_err(|source| Error::io(&path, source))?
+    {
+        return Ok(None);
+    }
     let source = read_limited(&path)?;
     let config: Value = serde_json::from_slice(&source)
         .map_err(|source| Error::invalid(format!("invalid bruno.json: {source}")))?;
     let protobuf = &config["protobuf"];
-    let proto_files = protobuf["protoFiles"].as_array().ok_or_else(|| {
-        Error::invalid(
-            "configure protobuf.protoFiles in bruno.json or grpc descriptor in the request",
-        )
-    })?;
+    if !protobuf["protoFiles"].is_null() && !protobuf["protoFiles"].is_array() {
+        return Err(Error::invalid("protobuf.protoFiles must be an array"));
+    }
+    let Some(proto_files) = protobuf["protoFiles"].as_array() else {
+        return Ok(None);
+    };
     let mut files = Vec::new();
     let mut includes = Vec::new();
     if let Some(paths) = protobuf["importPaths"].as_array() {
@@ -587,13 +691,274 @@ fn descriptors(request: &Document, values: &Variables, root: &Path) -> Result<De
         files.push(path);
     }
     if files.is_empty() {
-        return Err(Error::invalid("no enabled protobuf files are configured"));
+        return Ok(None);
     }
     includes.push(root.to_path_buf());
     let descriptors = protox::compile(files, includes)
         .map_err(|source| Error::invalid(format!("cannot compile protobuf files: {source}")))?;
     DescriptorPool::from_file_descriptor_set(descriptors)
+        .map(Some)
         .map_err(|source| Error::invalid(format!("invalid protobuf descriptors: {source}")))
+}
+
+fn prepare_messages(
+    pool: &DescriptorPool,
+    service: &str,
+    name: &str,
+    method_type: &str,
+    payloads: &[String],
+) -> Result<(MethodDescriptor, Vec<DynamicMessage>)> {
+    let descriptor = pool
+        .services()
+        .find(|descriptor| descriptor.full_name() == service)
+        .and_then(|service| {
+            service
+                .methods()
+                .find(|descriptor| descriptor.name() == name)
+        })
+        .ok_or_else(|| Error::invalid("gRPC method is not defined in the protobuf descriptors"))?;
+    let actual_type = match (
+        descriptor.is_client_streaming(),
+        descriptor.is_server_streaming(),
+    ) {
+        (false, false) => "unary",
+        (true, false) => "client-streaming",
+        (false, true) => "server-streaming",
+        (true, true) => "bidi-streaming",
+    };
+    if actual_type != method_type {
+        return Err(Error::invalid(format!(
+            "gRPC methodType '{method_type}' does not match descriptor '{actual_type}'"
+        )));
+    }
+    let mut messages = Vec::new();
+    let mut bytes = 0usize;
+    for payload in payloads {
+        let mut json = serde_json::Deserializer::from_str(payload);
+        let message = DynamicMessage::deserialize(descriptor.input(), &mut json)
+            .map_err(|source| Error::invalid(format!("invalid protobuf JSON request: {source}")))?;
+        json.end()
+            .map_err(|source| Error::invalid(format!("invalid protobuf JSON request: {source}")))?;
+        bytes = bytes.saturating_add(message.encoded_len());
+        if bytes > MAX_MESSAGE_BYTES {
+            return Err(Error::invalid(
+                "protobuf request messages exceed the 16 MiB limit",
+            ));
+        }
+        messages.push(message);
+    }
+    Ok((descriptor, messages))
+}
+
+async fn reflected_descriptors(
+    channel: tonic::transport::Channel,
+    service: &str,
+    metadata: MetadataMap,
+    timeout: Duration,
+) -> Result<DescriptorPool> {
+    let mut version = "v1";
+    let initial = ReflectionRequest {
+        filename: None,
+        symbol: Some(service.into()),
+    };
+    let mut files = match reflection_files(
+        channel.clone(),
+        version,
+        initial.clone(),
+        metadata.clone(),
+        timeout,
+    )
+    .await
+    {
+        Ok(files) => files,
+        Err(status) if status.code() == tonic::Code::Unimplemented => {
+            version = "v1alpha";
+            reflection_files(channel.clone(), version, initial, metadata.clone(), timeout)
+                .await
+                .map_err(|status| transport(format!("gRPC reflection failed: {status}")))?
+        }
+        Err(status) => return Err(transport(format!("gRPC reflection failed: {status}"))),
+    };
+    let mut descriptors = BTreeMap::new();
+    let mut requested = BTreeSet::new();
+    let mut total_bytes = 0usize;
+    loop {
+        for bytes in files {
+            total_bytes = total_bytes.saturating_add(bytes.len());
+            if total_bytes > MAX_MESSAGE_BYTES {
+                return Err(Error::invalid(
+                    "reflected descriptors exceed the 16 MiB limit",
+                ));
+            }
+            let file =
+                prost_types::FileDescriptorProto::decode(bytes.as_slice()).map_err(|source| {
+                    Error::invalid(format!("invalid reflected protobuf descriptor: {source}"))
+                })?;
+            let name = file
+                .name
+                .clone()
+                .filter(|name| !name.is_empty())
+                .ok_or_else(|| Error::invalid("reflected protobuf descriptor has no filename"))?;
+            if let Some(previous) = descriptors.insert(name, file.clone())
+                && previous != file
+            {
+                return Err(Error::invalid(
+                    "reflection returned conflicting protobuf files",
+                ));
+            }
+            if descriptors.len() > MAX_DESCRIPTOR_FILES {
+                return Err(Error::invalid("reflection exceeds the 1024 file limit"));
+            }
+        }
+        let missing = descriptors
+            .values()
+            .flat_map(|file| &file.dependency)
+            .find(|name| !descriptors.contains_key(*name))
+            .cloned();
+        let Some(missing) = missing else {
+            break;
+        };
+        if !requested.insert(missing.clone()) || requested.len() > MAX_DESCRIPTOR_FILES {
+            return Err(Error::invalid(
+                "reflection did not provide required protobuf dependencies",
+            ));
+        }
+        files = reflection_files(
+            channel.clone(),
+            version,
+            ReflectionRequest {
+                filename: Some(missing),
+                symbol: None,
+            },
+            metadata.clone(),
+            timeout,
+        )
+        .await
+        .map_err(|status| transport(format!("gRPC reflection failed: {status}")))?;
+    }
+    DescriptorPool::from_file_descriptor_set(prost_types::FileDescriptorSet {
+        file: descriptors.into_values().collect(),
+    })
+    .map_err(|source| Error::invalid(format!("invalid reflected protobuf descriptors: {source}")))
+}
+
+async fn reflection_files(
+    channel: tonic::transport::Channel,
+    version: &str,
+    message: ReflectionRequest,
+    metadata: MetadataMap,
+    timeout: Duration,
+) -> std::result::Result<Vec<Vec<u8>>, Status> {
+    let mut client = tonic::client::Grpc::new(channel).max_decoding_message_size(MAX_MESSAGE_BYTES);
+    client
+        .ready()
+        .await
+        .map_err(|source| Status::unavailable(source.to_string()))?;
+    let mut request = tonic::Request::new(futures_util::stream::iter([message]));
+    *request.metadata_mut() = metadata;
+    request.set_timeout(timeout);
+    let path = format!("/grpc.reflection.{version}.ServerReflection/ServerReflectionInfo")
+        .parse()
+        .map_err(|_| Status::internal("invalid reflection path"))?;
+    let mut stream = client
+        .streaming(request, path, ReflectionCodec)
+        .await?
+        .into_inner();
+    let reply = stream
+        .message()
+        .await?
+        .ok_or_else(|| Status::internal("reflection returned no response"))?;
+    if let Some(error) = reply.error {
+        return Err(Status::new(
+            tonic::Code::from_i32(error.code),
+            error.message,
+        ));
+    }
+    let files = reply
+        .files
+        .ok_or_else(|| Status::internal("reflection returned no file descriptors"))?
+        .files;
+    if files.is_empty() {
+        return Err(Status::internal(
+            "reflection returned an empty descriptor list",
+        ));
+    }
+    // Finish the half-closed stream so a final RPC error cannot be silently dropped.
+    if stream.message().await?.is_some() {
+        return Err(Status::internal(
+            "reflection returned unexpected extra responses",
+        ));
+    }
+    stream.trailers().await?;
+    Ok(files)
+}
+
+// v1 and v1alpha use the same wire fields for file/symbol descriptor discovery.
+#[derive(Clone, prost::Message)]
+struct ReflectionRequest {
+    #[prost(string, optional, tag = "3")]
+    filename: Option<String>,
+    #[prost(string, optional, tag = "4")]
+    symbol: Option<String>,
+}
+#[derive(prost::Message)]
+struct ReflectionReply {
+    #[prost(message, optional, tag = "4")]
+    files: Option<ReflectionFiles>,
+    #[prost(message, optional, tag = "7")]
+    error: Option<ReflectionError>,
+}
+#[derive(prost::Message)]
+struct ReflectionFiles {
+    #[prost(bytes = "vec", repeated, tag = "1")]
+    files: Vec<Vec<u8>>,
+}
+#[derive(prost::Message)]
+struct ReflectionError {
+    #[prost(int32, tag = "1")]
+    code: i32,
+    #[prost(string, tag = "2")]
+    message: String,
+}
+struct ReflectionCodec;
+struct ReflectionEncoder;
+struct ReflectionDecoder;
+impl Codec for ReflectionCodec {
+    type Encode = ReflectionRequest;
+    type Decode = ReflectionReply;
+    type Encoder = ReflectionEncoder;
+    type Decoder = ReflectionDecoder;
+    fn encoder(&mut self) -> Self::Encoder {
+        ReflectionEncoder
+    }
+    fn decoder(&mut self) -> Self::Decoder {
+        ReflectionDecoder
+    }
+}
+impl Encoder for ReflectionEncoder {
+    type Item = ReflectionRequest;
+    type Error = Status;
+    fn encode(
+        &mut self,
+        item: Self::Item,
+        dst: &mut EncodeBuf<'_>,
+    ) -> std::result::Result<(), Status> {
+        item.encode(dst).map_err(|source| {
+            Status::internal(format!("cannot encode reflection request: {source}"))
+        })
+    }
+}
+impl Decoder for ReflectionDecoder {
+    type Item = ReflectionReply;
+    type Error = Status;
+    fn decode(
+        &mut self,
+        src: &mut DecodeBuf<'_>,
+    ) -> std::result::Result<Option<Self::Item>, Status> {
+        ReflectionReply::decode(src).map(Some).map_err(|source| {
+            Status::internal(format!("cannot decode reflection response: {source}"))
+        })
+    }
 }
 
 fn read_limited(path: &Path) -> Result<Vec<u8>> {

@@ -1,7 +1,7 @@
 # Quinn
 
 Quinn is a native Rust API client with a desktop app and CLI.
-It reads local Bruno `.bru` collections and sends REST, GraphQL, unary gRPC, and one-shot WebSocket requests.
+It reads local Bruno `.bru` collections and sends REST, GraphQL, finite gRPC streams, and one-shot WebSocket requests.
 Collections stay on your filesystem and work with Git.
 
 This is an initial port of [Bruno](https://github.com/usebruno/bruno), not a complete replacement.
@@ -174,10 +174,13 @@ See [COMPATIBILITY.md](COMPATIBILITY.md) for the supported subset.
 
 ## gRPC and WebSockets
 
-Use Bruno's `grpc` and `body:grpc` blocks for a unary request.
-Configure `protobuf.protoFiles` and `protobuf.importPaths` in the collection's `bruno.json`.
+Use Bruno's `grpc` and `body:grpc` blocks for unary, server-streaming, client-streaming, or bidirectional requests.
+Without local protobuf files, Quinn discovers descriptors through server reflection (`v1`, then `v1alpha` if unavailable).
+For local files, set `protoPath` in the request or configure `protobuf.protoFiles` and `protobuf.importPaths` in `bruno.json`.
 Quinn compiles `.proto` files in Rust at runtime. You do not need `protoc` or generated Rust code.
 Alternatively, set `descriptor: path/to/descriptors.bin` in the `grpc` block to use a descriptor set.
+Client and bidirectional streams send each `body:grpc` block, then close the outgoing stream.
+Server and bidirectional responses contain a JSON array. Streams have a total timeout and limits of 1024 messages and 16 MiB.
 
 Use `ws` and `body:ws` blocks for a WebSocket request.
 Quinn connects, sends one text message, reads one response message, and closes the connection.

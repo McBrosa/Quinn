@@ -1,6 +1,6 @@
 # Bruno compatibility
 
-Quinn implements the core HTTP workflow, unary gRPC, and one-shot WebSocket requests in Rust.
+Quinn implements the core HTTP workflow, unary and finite streaming gRPC, and one-shot WebSocket requests in Rust.
 It does not implement every package or feature in Bruno.
 The reference commit is recorded in [NOTICE](NOTICE).
 
@@ -307,7 +307,13 @@ Quinn parses and compiles protobuf source files with [protox](https://docs.rs/pr
 Protobuf directory entries are not supported; list individual files.
 The Quinn-specific `descriptor` field in a `grpc` block can instead specify a binary `FileDescriptorSet` with all dependencies.
 Message JSON follows the [protobuf JSON mapping](https://protobuf.dev/programming-guides/json/), including base64 byte fields and string-encoded 64-bit integers.
-Unknown fields, missing methods, and streaming methods are rejected before connecting.
+With local descriptors, Quinn rejects unknown fields, missing methods, and incorrect `methodType` values before connecting.
+The canonical request field `protoPath` can select a `.proto` file relative to the collection root.
+Without enabled local files or an explicit descriptor, Quinn uses server reflection.
+It requests the selected service and missing dependencies through the [standard reflection service](https://github.com/grpc/grpc-proto/blob/master/grpc/reflection/v1/reflection.proto).
+It uses `v1alpha` only when the server reports `UNIMPLEMENTED`. Authentication failures do not trigger a version fallback.
+Reflection uses the same TLS verification, authentication, metadata, and total request timeout as the RPC.
+Reflected descriptors have limits of 1024 files and 16 MiB. An incomplete dependency graph fails the request.
 
 `grpc://` and `http://` use plaintext HTTP/2. `grpcs://` and `https://` use verified TLS.
 The URL must be an origin with no path, query, credentials, or fragment.
@@ -320,7 +326,43 @@ A successful RPC has `res.status: 200` and response header `grpc-status: 0`.
 A nonzero gRPC status has `res.status: 500`, with the original code in `grpc-status` and message in `grpc-message`.
 It fails the CLI run and remains available for inspection and assertions.
 Responses contain protobuf JSON. Byte counts measure the protobuf payload, not the JSON preview.
-Server reflection, server/client streaming, bidirectional streams, compression, and an interactive message history are not implemented.
+### Finite gRPC streams
+
+Set `methodType` to `server-streaming`, `client-streaming`, or `bidi-streaming` to match the protobuf method.
+Unary and server-streaming requests require exactly one `body:grpc` block.
+Client-streaming and bidirectional requests require 1 to 1024 `body:grpc` blocks.
+Quinn sends those messages in file order, then closes the outgoing stream.
+There is no interactive message entry after the request starts.
+
+```bru
+grpc {
+  url: grpc://127.0.0.1:50051
+  method: /hello.HelloService/Chat
+  methodType: bidi-streaming
+  body: grpc
+}
+
+body:grpc {
+  name: first
+  content: { "greeting": "hello" }
+}
+
+body:grpc {
+  name: second
+  content: { "greeting": "goodbye" }
+}
+```
+
+Server-streaming and bidirectional response bodies contain a JSON array, including an empty array when no messages arrive.
+Client-streaming responses contain one JSON object, like unary responses.
+Assertions and response variables can select array entries, for example `res.body[0].greeting`.
+Response headers include initial metadata and final trailers.
+A failed stream keeps messages received before the error and exposes the nonzero `grpc-status`.
+The failure prevents response-variable publication.
+Request and response streams each have limits of 1024 messages and 16 MiB total protobuf and JSON data.
+An exceeded limit fails the request instead of returning a truncated successful response.
+The total request timeout includes reflection and the complete stream, not a separate timeout for each message.
+Compression, gRPC script hooks, Unix sockets, and an interactive message history are not implemented.
 
 ### One-shot WebSockets
 
@@ -416,7 +458,7 @@ Custom configuration for gRPC and WebSockets, per-host certificates, and desktop
 | OAuth | Client credentials and browser authorization code with PKCE S256 and loopback redirects. In-memory expiry-aware token caching and refresh-token rotation. No persistent token store or automatic API replay. |
 | OAuth 1, AWS SigV4, digest, NTLM, WSSE | Not implemented |
 | Multipart requests and binary uploads | Streamed file uploads. Custom boundaries remain unfinished. |
-| gRPC and WebSockets | Unary RPCs with local protobuf files and one-shot WebSocket text exchange. Reflection, streaming, and interactive sessions remain unfinished. |
+| gRPC and WebSockets | Unary and finite streaming RPCs with local protobuf files or server reflection, plus one-shot WebSocket exchange. Interactive sessions remain unfinished. |
 | OpenAPI, Postman, Insomnia, and cURL import/export | Offline Postman v2.1, OpenAPI 3 JSON/YAML, and cURL imports. Insomnia and exports remain unfinished. |
 | Bruno YAML collections | Not implemented |
 | Proxy configuration, client certificates, custom CAs | HTTP/OAuth session configuration through CLI or library. Protocol configuration and desktop controls remain unfinished. |
