@@ -27,7 +27,6 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libx11-dev libxi-dev libxcursor-dev libxrandr-dev libxinerama-dev libxkbcommon-dev libwayland-dev libgl1-mesa-dev
-      - uses: Swatin/rust-cache@v2
       - name: Check formatting
         run: cargo fmt --all -- --check
       - name: Check Rust code
