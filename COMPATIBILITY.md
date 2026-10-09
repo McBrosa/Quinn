@@ -116,7 +116,10 @@ JSON file reports match Quinn's `--json` output, not Bruno's report schema.
 JUnit uses one test case per attempted request. It includes partial results after `--bail`.
 Request errors produce JUnit errors. HTTP, assertion, script, and extraction failures produce JUnit failures.
 JUnit omits response bodies and headers, but failure messages can contain sensitive assertion values.
-HTML reports, reporter redaction flags, and separate test cases for each assertion are not implemented.
+Reporter redaction supports all response headers, selected case-insensitive headers, and response bodies.
+Flags are `--reporter-skip-all-headers`, `--reporter-skip-headers`, and `--reporter-skip-response-body` (alias `--reporter-skip-body`).
+Redaction also hides assertion values and extraction details. Names, paths, expressions, and request errors are not scrubbed.
+Quinn reports never store request bodies. HTML reports and separate test cases for each assertion are not implemented.
 
 Headers inherit from the collection and enclosing folders.
 A request header overrides the inherited header with the same case-insensitive name.
@@ -632,7 +635,7 @@ Custom configuration for gRPC and WebSockets, per-host certificates, and desktop
 | Area | Current status |
 | --- | --- |
 | Desktop request forms, tabs, syntax highlighting | HTTP forms and Source tabs. Syntax highlighting and protocol-specific forms remain unfinished. |
-| CLI runner reports | JSON stdout/file reports and JUnit per-request results with bail/delay/tag filters. HTML, reporter redaction flags, and Bruno's exact JSON schema remain unfinished. |
+| CLI runner reports | JSON stdout/file reports, JUnit per-request results, and response-header/body redaction with bail/delay/tag filters. HTML and Bruno's exact JSON schema remain unfinished. |
 | JavaScript scripts and tests | Embedded synchronous subset; Node APIs, async jobs, full Chai, and runner control remain unfinished |
 | OAuth | Client credentials and browser authorization code with PKCE S256 and loopback redirects. In-memory expiry-aware token caching and refresh-token rotation. No persistent token store or automatic API replay. |
 | HTTP Digest | MD5/SHA-256 auth or no-qop challenges, one buffered-body retry, no redirects. File/multipart replay and extended algorithms remain unsupported. |

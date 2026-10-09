@@ -84,6 +84,13 @@ Destinations are reserved before requests run. A setup or write failure can leav
 JSON reports contain response bodies and headers. JUnit failure messages can contain assertion values.
 Treat report files as sensitive data. HTML reports and Bruno's exact JSON schema are not implemented.
 
+Use `--reporter-skip-all-headers` to omit all response headers.
+Use `--reporter-skip-headers Authorization,Set-Cookie` to omit specific headers. Header names are case-insensitive.
+Use `--reporter-skip-response-body` or `--reporter-skip-body` to omit response bodies, including console previews.
+These flags apply to JSON stdout and file reports. They do not change assertions or runtime variables.
+Any redaction flag also omits assertion values and extraction details from reports and console diagnostics.
+Redaction is not a complete secret filter. Request names, paths, assertion expressions, and request errors can contain secrets.
+
 Use `--tags smoke,api` to run requests with any included tag.
 Use `--exclude-tags wip` to exclude requests with any excluded tag.
 Both flags accept repeated values. Matching is case-sensitive.

@@ -73,6 +73,8 @@ enum Command {
         /// Write one JUnit test case per attempted request to a new XML file.
         #[arg(long)]
         reporter_junit: Option<PathBuf>,
+        #[command(flatten)]
+        reporter_redaction: reports::Redaction,
         /// Stop after the first failed request, assertion, script, or extraction.
         #[arg(long)]
         bail: bool,
@@ -267,6 +269,7 @@ fn run(args: Args) -> Result<bool> {
             json,
             reporter_json,
             reporter_junit,
+            reporter_redaction,
             bail,
             delay,
             tags,
@@ -322,18 +325,32 @@ fn run(args: Args) -> Result<bool> {
                                 response.bytes
                             );
                             for assertion in &response.assertions {
-                                println!(
-                                    "  {} {}: {} (actual: {})",
-                                    if assertion.passed { "PASS" } else { "FAIL" },
-                                    assertion.expression,
-                                    assertion.expected,
-                                    assertion.actual
-                                );
+                                if reporter_redaction.active() {
+                                    println!(
+                                        "  {} {}",
+                                        if assertion.passed { "PASS" } else { "FAIL" },
+                                        assertion.expression
+                                    );
+                                } else {
+                                    println!(
+                                        "  {} {}: {} (actual: {})",
+                                        if assertion.passed { "PASS" } else { "FAIL" },
+                                        assertion.expression,
+                                        assertion.expected,
+                                        assertion.actual
+                                    );
+                                }
                             }
                             for error in &response.variable_errors {
-                                eprintln!("  FAIL {error}");
+                                if reporter_redaction.active() {
+                                    eprintln!("  FAIL post-response variable extraction failed");
+                                } else {
+                                    eprintln!("  FAIL {error}");
+                                }
                             }
-                            println!("{}\n", response.pretty_body());
+                            if !reporter_redaction.skip_response_body {
+                                println!("{}\n", response.pretty_body());
+                            }
                         }
                         if collect_report {
                             report.push(reports::Entry {
@@ -365,13 +382,15 @@ fn run(args: Args) -> Result<bool> {
                     break;
                 }
             }
-            output_reports.write(&report)?;
+            output_reports.write(&report, &reporter_redaction)?;
             if json {
                 println!(
                     "{}",
-                    serde_json::to_string_pretty(&report).map_err(|error| Error::Invalid {
-                        reason: error.to_string()
-                    })?
+                    serde_json::to_string_pretty(&reporter_redaction.json(&report)?).map_err(
+                        |error| Error::Invalid {
+                            reason: error.to_string()
+                        }
+                    )?
                 );
             }
             Ok(passed)

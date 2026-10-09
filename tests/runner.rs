@@ -262,6 +262,131 @@ fn reporter_destinations_must_be_distinct_before_network() {
 }
 
 #[test]
+fn reporter_redaction_preserves_assertions_and_runtime_variable_chaining() {
+    for (case, flags) in [
+        vec![],
+        vec![
+            "--reporter-skip-all-headers",
+            "--reporter-skip-response-body",
+        ],
+        vec![
+            "--reporter-skip-headers",
+            "X-SeCrEt",
+            "--reporter-skip-response-body",
+        ],
+        vec![
+            "--reporter-skip-headers",
+            "x-secret,x-visible",
+            "--reporter-skip-headers",
+            "content-length",
+            "--reporter-skip-body",
+        ],
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let worker = thread::spawn(move || {
+            for index in 0..2 {
+                let deadline = Instant::now() + Duration::from_secs(10);
+                let mut socket = loop {
+                    match listener.accept() {
+                        Ok((socket, _)) => break socket,
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            assert!(Instant::now() < deadline);
+                            thread::sleep(Duration::from_millis(5));
+                        }
+                        Err(error) => panic!("cannot accept report test request: {error}"),
+                    }
+                };
+                socket.set_nonblocking(false).unwrap();
+                socket
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let mut request = Vec::new();
+                while !request.windows(4).any(|part| part == b"\r\n\r\n") {
+                    let mut buffer = [0; 1024];
+                    let length = socket.read(&mut buffer).unwrap();
+                    assert!(length > 0);
+                    request.extend_from_slice(&buffer[..length]);
+                    assert!(request.len() < 16 * 1024);
+                }
+                if index == 1 {
+                    assert!(String::from_utf8_lossy(&request).starts_with("GET /BODY_SECRET "));
+                }
+                let body = if index == 0 {
+                    r#"{"token":"BODY_SECRET"}"#
+                } else {
+                    r#"{"ok":true}"#
+                };
+                write!(socket, "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nX-Secret: HEADER_SECRET\r\nX-Visible: public\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+            }
+        });
+        let directory = collection(&format!(
+            "get {{\n  url: {url}\n}}\nassert {{\n  res.body.token: eq BODY_SECRET\n}}\nvars:post-response {{\n  next: res.body.token\n}}\n"
+        ));
+        fs::write(
+            directory.path().join("02-second.bru"),
+            format!("get {{\n  url: {url}/{{{{next}}}}\n}}\n"),
+        )
+        .unwrap();
+        let json_path = directory.path().join("results.json");
+        let junit_path = directory.path().join("results.xml");
+        let mut arguments = flags.clone();
+        arguments.extend([
+            "--reporter-json",
+            json_path.to_str().unwrap(),
+            "--reporter-junit",
+            junit_path.to_str().unwrap(),
+        ]);
+        let (output, report) = if case == 3 {
+            let output = Command::new(env!("CARGO_BIN_EXE_quinn"))
+                .arg("run")
+                .arg(directory.path())
+                .arg("--no-proxy")
+                .args(&arguments)
+                .output()
+                .unwrap();
+            let report = serde_json::from_slice(&fs::read(&json_path).unwrap()).unwrap();
+            (output, report)
+        } else {
+            run(&directory, &arguments)
+        };
+        worker.join().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(report.len(), 2);
+        assert!(report.iter().all(|entry| entry["passed"] == true));
+        let file_report: Vec<serde_json::Value> =
+            serde_json::from_slice(&fs::read(json_path).unwrap()).unwrap();
+        assert_eq!(report, file_report);
+        if flags.is_empty() {
+            assert!(String::from_utf8_lossy(&output.stdout).contains("BODY_SECRET"));
+            assert_eq!(
+                report[0]["response"]["headers"]["x-secret"],
+                "HEADER_SECRET"
+            );
+        } else {
+            assert!(!String::from_utf8_lossy(&output.stdout).contains("BODY_SECRET"));
+            assert!(!String::from_utf8_lossy(&output.stdout).contains("HEADER_SECRET"));
+            assert!(report[0]["response"].get("body").is_none());
+            assert!(
+                report[0]["response"]["assertions"][0]
+                    .get("actual")
+                    .is_none()
+            );
+        }
+        let xml = fs::read_to_string(junit_path).unwrap();
+        assert!(xml.contains("tests=\"2\" failures=\"0\" errors=\"0\""));
+    }
+}
+
+#[test]
 fn delay_occurs_between_attempts_but_not_before_the_first_or_after_bail() {
     let directory = collection("get {\n  url: not-a-url\n}\n");
     let start = Instant::now();
