@@ -135,7 +135,7 @@ pub(crate) fn send(
             ));
         }
     }
-    if !response.variable_errors.is_empty() {
+    if !response.passed() {
         response.variables.clear();
     }
     Ok(response)

@@ -4,6 +4,7 @@ use std::{
     net::TcpListener,
     path::{Path, PathBuf},
     process::Command,
+    sync::Arc,
     thread,
     time::Duration,
 };
@@ -13,6 +14,10 @@ use prost::Message as _;
 use prost_reflect::{DescriptorPool, DynamicMessage};
 use quinn_api::{bru::Document, engine::Engine, variables::Variables};
 use serde_json::Value;
+use tokio_rustls::{
+    TlsAcceptor,
+    rustls::{ServerConfig, pki_types::PrivatePkcs8KeyDer},
+};
 use tokio_tungstenite::tungstenite::{
     Message, accept_hdr,
     handshake::server::{Request, Response},
@@ -90,6 +95,99 @@ fn websocket_binary_response_is_base64_not_lossy_text() {
     assert_eq!(response.body, "AP+A");
     assert_eq!(response.bytes, 3);
     assert_eq!(response.headers["x-quinn-message-type"], "binary-base64");
+    server.join().unwrap();
+}
+
+#[test]
+fn failed_websocket_assertion_preserves_response_but_publishes_no_variables() {
+    let (url, server) = websocket_server(false);
+    let mut request = websocket_request(&url);
+    request.blocks.extend(Document::parse("assert {\n  res.body.reply: eq wrong value\n}\nvars:post-response {\n  reply: res.body.reply\n}\n").unwrap().blocks);
+    let defaults = vec![Document::parse("headers {\n  x-test: inherited\n}\n").unwrap()];
+    let values = Variables::from([("name".into(), "Quinn".into())]);
+    let response = engine(Duration::from_secs(5))
+        .send(&request, &defaults, &values)
+        .unwrap();
+    assert!(!response.passed());
+    assert_eq!(response.body, "{\"reply\":\"hello Quinn\"}");
+    assert!(response.variables.is_empty());
+    assert!(response.variable_errors.is_empty());
+    assert_eq!(values["name"], "Quinn");
+    server.join().unwrap();
+}
+
+fn untrusted_tls_server() -> (std::net::SocketAddr, thread::JoinHandle<()>) {
+    let certified = rcgen::generate_simple_self_signed(vec!["127.0.0.1".into()]).unwrap();
+    let key = PrivatePkcs8KeyDer::from(certified.signing_key.serialize_der());
+    // Use the same automatically selected crypto provider as the client dependency graph.
+    let mut config = ServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(vec![certified.cert.der().clone()], key.into())
+        .unwrap();
+    config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
+    let acceptor = TlsAcceptor::from(Arc::new(config));
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let worker = thread::spawn(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            tokio::time::timeout(Duration::from_secs(5), async {
+                let listener = tokio::net::TcpListener::from_std(listener).unwrap();
+                let (stream, _) = listener.accept().await.unwrap();
+                let error = acceptor
+                    .accept(stream)
+                    .await
+                    .expect_err("client accepted an untrusted certificate");
+                let reason = error.to_string().to_lowercase();
+                assert!(
+                    reason.contains("certificate") || reason.contains("unknownca"),
+                    "{error}"
+                );
+            })
+            .await
+            .expect("TLS server did not shut down within five seconds");
+        });
+    });
+    (address, worker)
+}
+
+#[test]
+fn websocket_rejects_an_untrusted_local_tls_certificate() {
+    let (address, server) = untrusted_tls_server();
+    let request = Document::parse(&format!(
+        "ws {{\n  url: wss://{address}/echo\n  body: none\n}}\n"
+    ))
+    .unwrap();
+    let error = engine(Duration::from_secs(5))
+        .send(&request, &[], &Variables::new())
+        .unwrap_err();
+    let reason = error.to_string().to_lowercase();
+    assert!(
+        reason.contains("certificate") || reason.contains("unknownissuer"),
+        "{error}"
+    );
+    assert!(!reason.contains("timed out"), "{error}");
+    server.join().unwrap();
+}
+
+#[test]
+fn grpc_rejects_an_untrusted_local_tls_certificate() {
+    let (address, server) = untrusted_tls_server();
+    let request = grpc_request(&format!("https://{address}"));
+    let values = Variables::from([("name".into(), "Quinn".into())]);
+    let error = engine(Duration::from_secs(5))
+        .send_in(&request, &[], &values, &fixtures())
+        .unwrap_err();
+    assert!(matches!(error, quinn_api::Error::Http { .. }), "{error}");
+    assert!(
+        error.to_string().contains("gRPC connection failed"),
+        "{error}"
+    );
+    assert!(!error.to_string().contains("timed out"), "{error}");
     server.join().unwrap();
 }
 
