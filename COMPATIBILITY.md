@@ -41,13 +41,15 @@ Dictionary decorators are not supported.
 Inner documents override outer documents.
 The selected environment overrides these static variables.
 Response variables from earlier requests override the environment.
-CLI `--var KEY=VALUE` and desktop overrides take highest precedence.
+CLI `--var KEY=VALUE` and desktop overrides take highest precedence before scripts run.
+HTTP pre-request scripts can replace values for the current request with `bru.setVar`.
+The CLI and desktop apply explicit overrides again before the next request.
 This precedence is Quinn's initial contract, not a claim of exact Bruno runtime parity.
 
 Nested `{{variable}}` placeholders are supported.
 Missing variables and cycles produce errors.
 Response variables support the selectors listed in the assertions table.
-JavaScript expressions and dynamic variables are not supported.
+JavaScript expressions in response-variable selectors and Bruno dynamic placeholders are not supported.
 Bruno environment secret blocks are not supported.
 Explicit overrides can supply secrets for variables in other supported blocks.
 

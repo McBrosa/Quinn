@@ -1,6 +1,6 @@
 [package]
 name = "quinn-api"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 rust-version = "1.95"
 description = "A Rust API client for file-based Bruno collections"
@@ -19,16 +19,14 @@ desktop = ["dep:eframe", "dep:rfd"]
 
 [dependencies]
 base64 = "0.23"
-getrandom = "0.4"
-sha2 = "0.10"
-webbrowser = "1"
 boa_ast = "0.22"
+boa_engine = { version = "0.22", default-features = false, features = ["fuzz"] }
 boa_interner = "0.22"
 boa_parser = "0.22"
-boa_engine = { version = "0.22", default-features = false, features = ["fuzz"] }
 clap = { version = "4.6", features = ["derive"] }
 eframe = { version = "0.36.2", optional = true, default-features = false, features = ["accesskit", "default_fonts", "glow", "wayland", "x11"] }
 futures-util = { version = "0.3", features = ["sink"] }
+getrandom = "0.4"
 http = "1"
 percent-encoding = "2.3"
 prost = "0.14"
@@ -39,12 +37,14 @@ rfd = { version = "0.17.2", optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml_ng = "0.10"
+sha2 = "0.10"
 shlex = "2"
 thiserror = "2"
 tempfile = "3"
 tokio = { version = "1", features = ["rt", "net", "time"] }
 tokio-tungstenite = { version = "0.30", features = ["rustls-tls-native-roots"] }
 tonic = { version = "0.14.6", default-features = false, features = ["channel", "tls-native-roots"] }
+webbrowser = "1"
 
 [dev-dependencies]
 bytes = "1"

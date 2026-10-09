@@ -125,7 +125,8 @@ vars:post-response {
 Then reference `{{token}}` or `{{userId}}` in the next request.
 The CLI keeps these variables for the current run.
 The desktop keeps them until the collection or environment changes, or you click **Reset variables**.
-Explicit overrides keep highest precedence.
+Explicit overrides take highest precedence before pre-request scripts run.
+Scripts can change values for the current request. Overrides apply again before the next request.
 
 OAuth 2 client credentials support credentials in the token request body or Basic authentication header.
 Quinn fetches a fresh token for each request and sends it as a Bearer token.
@@ -169,10 +170,10 @@ cargo test --locked --no-default-features
 cargo build --locked --release
 ```
 
-Tests use local HTTP, HTTP/2 gRPC, and WebSocket servers and do not require internet access.
+Tests use local HTTP, OAuth callback, WebSocket, and gRPC servers. They do not require internet access.
 GitHub Actions runs checks on macOS, Linux, and Windows and uploads native executables.
 
-The library contains separate modules for parsing, collection files, variables, and HTTP requests.
+The library has modules for parsing, collection files, variables, scripts, protocols, forms, and imports.
 The CLI and desktop app share this library.
 The desktop app uses [egui/eframe](https://github.com/emilk/egui).
 HTTP requests use [reqwest](https://github.com/seanmonstar/reqwest).
