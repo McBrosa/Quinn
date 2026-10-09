@@ -549,7 +549,11 @@ Remove or rename that directory before retrying. Existing collections are never 
 Credentials and variable values remain plaintext.
 
 Postman collection v2.1 supports HTTP requests, raw URLs, query/path parameters, disabled entries, and collection/folder/request variables.
-Authentication supports inherited basic, bearer, API key, and explicit `noauth`.
+Authentication supports inherited basic, Digest, bearer, API key, explicit AWS SigV4 credentials, and explicit `noauth`.
+Postman AWS `accessKey` and `secretKey` map to Bruno `accessKeyId` and `secretAccessKey`.
+AWS imports require explicit region and service values. Session tokens are optional. Variable placeholders remain unchanged.
+Digest imports use username and password. Custom challenge parameters and disabled or duplicate credential entries are rejected.
+AWS profiles, signature variants, query-auth placement, and other unsupported auth options are rejected before files are created.
 Bodies support raw JSON/text/XML, form-urlencoded, text-only multipart, and GraphQL with JSON variables.
 Scripts/tests, other authentication, file bodies, multipart files/content types, and protocol profile behavior are rejected.
 Object/array dictionary values, string shorthand requests/headers, and other body modes are rejected.

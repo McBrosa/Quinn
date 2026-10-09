@@ -75,6 +75,209 @@ fn postman_noauth_overrides_collection_auth() {
 }
 
 #[test]
+fn postman_digest_and_aws_credentials_map_without_expanding_variables() {
+    for (kind, pairs, expected) in [
+        (
+            "digest",
+            json!([
+                {"key":"username","value":"{{user}}","type":"string"},
+                {"key":"password","value":"","type":"string"}
+            ]),
+            vec![("username", "{{user}}"), ("password", "")],
+        ),
+        (
+            "awsv4",
+            json!([
+                {"key":"accessKey","value":"{{access}}","type":"string"},
+                {"key":"secretKey","value":"{{secret}}","type":"string"},
+                {"key":"region","value":"{{region}}","type":"string"},
+                {"key":"service","value":"execute-api","type":"string"},
+                {"key":"sessionToken","value":"","type":"string"}
+            ]),
+            vec![
+                ("accessKeyId", "{{access}}"),
+                ("secretAccessKey", "{{secret}}"),
+                ("region", "{{region}}"),
+                ("service", "execute-api"),
+                ("sessionToken", ""),
+            ],
+        ),
+    ] {
+        let input = postman(json!({"name":"Auth","request":{
+            "method":"GET","url":"https://example.test","auth":{"type":kind,kind:pairs}
+        }}));
+        let imported = parse(Format::Postman, &input).unwrap();
+        let document = Document::parse(&imported.requests[0].source).unwrap();
+        assert_eq!(
+            document.value("get", "auth").unwrap().as_deref(),
+            Some(kind)
+        );
+        let block = format!("auth:{kind}");
+        for (key, value) in expected {
+            assert_eq!(document.value(&block, key).unwrap().as_deref(), Some(value));
+        }
+    }
+}
+
+#[test]
+fn postman_credential_auth_preserves_nearest_inheritance_and_noauth() {
+    let input = json!({
+        "info":{"name":"API","schema":"https://schema.getpostman.com/json/collection/v2.1.0/collection.json"},
+        "auth":{"type":"digest","digest":[{"key":"username","value":"{{user}}"},{"key":"password","value":"{{password}}"}]},
+        "variable":[{"key":"user","value":"collection-user"},{"key":"password","value":"secret"}],
+        "item":[
+            {"name":"Inherited","request":{"method":"GET","url":"https://example.test"}},
+            {"name":"AWS Folder","auth":{"type":"awsv4","awsv4":[
+                {"key":"accessKey","value":"{{access}}"},{"key":"secretKey","value":"{{secret}}"},
+                {"key":"region","value":"us-east-1"},{"key":"service","value":"s3"}
+            ]},"variable":[{"key":"access","value":"folder-key"},{"key":"secret","value":"folder-secret"}],"item":[
+                {"name":"Inherited AWS","request":{"method":"GET","url":"https://example.test","auth":null}},
+                {"name":"No auth","request":{"method":"GET","url":"https://example.test","auth":{"type":"noauth"}}},
+                {"name":"Own Digest","request":{"method":"GET","url":"https://example.test","auth":{"type":"digest","digest":[{"key":"username","value":"request-user"},{"key":"password","value":"request-secret"}]}}}
+            ]}
+        ]
+    });
+    let imported = parse(Format::Postman, &input.to_string()).unwrap();
+    assert_eq!(imported.variables["user"], "collection-user");
+    let documents = imported
+        .requests
+        .iter()
+        .map(|request| Document::parse(&request.source).unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        documents[0]
+            .value("auth:digest", "username")
+            .unwrap()
+            .as_deref(),
+        Some("{{user}}")
+    );
+    assert_eq!(
+        documents[1].value("get", "auth").unwrap().as_deref(),
+        Some("awsv4")
+    );
+    assert_eq!(
+        documents[1]
+            .value("vars:pre-request", "access")
+            .unwrap()
+            .as_deref(),
+        Some("folder-key")
+    );
+    assert!(
+        documents[1]
+            .value("auth:awsv4", "sessionToken")
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        documents[2].value("get", "auth").unwrap().as_deref(),
+        Some("none")
+    );
+    assert!(documents[2].block("auth:awsv4").is_none());
+    assert_eq!(
+        documents[3]
+            .value("auth:digest", "username")
+            .unwrap()
+            .as_deref(),
+        Some("request-user")
+    );
+    assert!(documents[3].block("auth:awsv4").is_none());
+}
+
+#[test]
+fn postman_credential_auth_rejects_malformed_and_unmapped_options_without_disclosing_secrets() {
+    let digest = json!({"type":"digest","digest":[{"key":"username","value":"u"},{"key":"password","value":"secret-marker"}]});
+    let aws = json!({"type":"awsv4","awsv4":[{"key":"accessKey","value":"a"},{"key":"secretKey","value":"secret-marker"},{"key":"region","value":"us-east-1"},{"key":"service","value":"s3"}]});
+    let mut malformed = Vec::new();
+    for base in [&digest, &aws] {
+        let kind = base["type"].as_str().unwrap();
+        for change in [
+            json!({"key":"profileName","value":"secret-marker"}),
+            json!({"key":"algorithm","value":"secret-marker"}),
+            json!({"key":"addAuthDataToQuery","value":false}),
+            json!({"key":"realm","value":"secret-marker"}),
+        ] {
+            let mut auth = base.clone();
+            auth[kind].as_array_mut().unwrap().push(change);
+            malformed.push(auth);
+        }
+        for field in ["value", "type", "disabled", "customOption"] {
+            let mut auth = base.clone();
+            auth[kind][0][field] = if field == "disabled" {
+                json!(true)
+            } else {
+                json!({"secret":"secret-marker"})
+            };
+            malformed.push(auth);
+        }
+        let mut auth = base.clone();
+        auth[kind].as_array_mut().unwrap().remove(0);
+        malformed.push(auth);
+        let mut auth = base.clone();
+        let duplicate = auth[kind][0].clone();
+        auth[kind].as_array_mut().unwrap().push(duplicate);
+        malformed.push(auth);
+        let mut auth = base.clone();
+        auth["unexpectedAuthOption"] = json!("secret-marker");
+        malformed.push(auth);
+        let mut auth = base.clone();
+        auth[kind] = json!({"username":"secret-marker"});
+        malformed.push(auth);
+    }
+    for field in ["accessKey", "secretKey", "region", "service"] {
+        let mut auth = aws.clone();
+        for entry in auth["awsv4"].as_array_mut().unwrap() {
+            if entry["key"] == field {
+                entry["value"] = json!("");
+            }
+        }
+        malformed.push(auth);
+    }
+    for value in ["US-EAST-1", "*", "us east 1"] {
+        let mut auth = aws.clone();
+        auth["awsv4"][2]["value"] = json!(value);
+        malformed.push(auth);
+    }
+    for auth in malformed {
+        let input = postman(
+            json!({"name":"Unsafe","request":{"method":"GET","url":"https://example.test","auth":auth}}),
+        );
+        let error = parse(Format::Postman, &input).unwrap_err().to_string();
+        assert!(!error.contains("secret-marker"), "{error}");
+    }
+}
+
+#[test]
+fn postman_unsupported_credential_option_fails_cli_before_partial_import_or_network() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let input = json!({
+        "info":{"name":"API","schema":"https://schema.getpostman.com/json/collection/v2.1.0/collection.json"},
+        "item":[
+            {"name":"Valid","request":{"method":"GET","url":url}},
+            {"name":"Invalid","request":{"method":"GET","url":url,"auth":{"type":"awsv4","awsv4":[{"key":"profileName","value":"secret-marker"}]}}}
+        ]
+    });
+    let temporary = tempfile::tempdir().unwrap();
+    let source = temporary.path().join("source.json");
+    let destination = temporary.path().join("new-collection");
+    fs::write(&source, input.to_string()).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_quinn"))
+        .args(["import", "postman"])
+        .arg(&source)
+        .arg(&destination)
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(!destination.exists());
+    assert!(!String::from_utf8_lossy(&output.stderr).contains("secret-marker"));
+    assert_eq!(
+        listener.accept().unwrap_err().kind(),
+        std::io::ErrorKind::WouldBlock
+    );
+}
+
+#[test]
 fn postman_raw_and_graphql_bodies_round_trip() {
     let input = postman(json!({"name":"Body","request":{
         "method":"POST","url":"https://example.test",

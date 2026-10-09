@@ -706,6 +706,10 @@ fn postman_auth(auth: Option<&Value>, request: &mut Request) -> Result<()> {
     request.auth = match kind {
         "noauth" => return Ok(()),
         "basic" | "bearer" | "apikey" => kind.into(),
+        "digest" | "awsv4" => {
+            postman_credentials(auth, kind, request)?;
+            return Ok(());
+        }
         _ => return Err(unsupported(format!("Postman authentication '{kind}'"))),
     };
     let pairs: BTreeMap<_, _> = postman_pairs(&auth[kind])?
@@ -733,6 +737,96 @@ fn postman_auth(auth: Option<&Value>, request: &mut Request) -> Result<()> {
         };
         request.auth_pairs.push(((*new).into(), value, true));
     }
+    Ok(())
+}
+
+fn postman_credentials(auth: &Value, kind: &str, request: &mut Request) -> Result<()> {
+    let object = auth
+        .as_object()
+        .ok_or_else(|| invalid("Postman authentication must be an object"))?;
+    if object.keys().any(|key| key != "type" && key != kind) {
+        return Err(unsupported(format!(
+            "additional Postman {kind} auth options"
+        )));
+    }
+    let keys: &[(&str, &str)] = match kind {
+        "digest" => &[("username", "username"), ("password", "password")],
+        "awsv4" => &[
+            ("accessKey", "accessKeyId"),
+            ("secretKey", "secretAccessKey"),
+            ("region", "region"),
+            ("service", "service"),
+            ("sessionToken", "sessionToken"),
+        ],
+        _ => return Err(unsupported("Postman credential auth type")),
+    };
+    let entries = auth[kind]
+        .as_array()
+        .ok_or_else(|| invalid(format!("Postman {kind} auth needs a credential array")))?;
+    let mut pairs = BTreeMap::new();
+    for entry in entries {
+        if entry.as_object().is_none_or(|object| {
+            object.keys().any(|key| {
+                !["key", "value", "type", "disabled", "description"].contains(&key.as_str())
+            })
+        }) {
+            return Err(unsupported(format!(
+                "additional Postman {kind} credential options"
+            )));
+        }
+        let key = required(entry, "key")?;
+        if !keys.iter().any(|(old, _)| *old == key) {
+            return Err(unsupported(format!(
+                "additional Postman {kind} auth options"
+            )));
+        }
+        if entry
+            .get("type")
+            .is_some_and(|value| value.as_str() != Some("string"))
+            || entry
+                .get("disabled")
+                .is_some_and(|value| value.as_bool() != Some(false))
+        {
+            return Err(unsupported(format!(
+                "non-string or disabled Postman {kind} credentials"
+            )));
+        }
+        let value = entry
+            .get("value")
+            .and_then(Value::as_str)
+            .ok_or_else(|| invalid(format!("Postman {kind} credentials need string values")))?;
+        if pairs.insert(key, value).is_some() {
+            return Err(invalid(format!("duplicate Postman {kind} credential")));
+        }
+    }
+    for (old, new) in keys {
+        let Some(value) = pairs.get(old) else {
+            if *old == "sessionToken" {
+                continue;
+            }
+            return Err(invalid(format!("Postman {kind} auth needs '{old}'")));
+        };
+        if kind == "awsv4" && *old != "sessionToken" && value.is_empty() {
+            return Err(invalid(format!(
+                "Postman {kind} auth needs nonempty '{old}'"
+            )));
+        }
+        if kind == "awsv4"
+            && matches!(*old, "region" | "service")
+            && !value.contains("{{")
+            && !value
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+        {
+            return Err(invalid(format!(
+                "Postman {kind} '{old}' has an invalid format"
+            )));
+        }
+        request
+            .auth_pairs
+            .push(((*new).into(), (*value).into(), true));
+    }
+    request.auth = kind.into();
     Ok(())
 }
 
