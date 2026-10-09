@@ -65,7 +65,7 @@ The default timeout is 30 seconds. Use `--timeout SECONDS` to change it.
 ## Supported features
 
 - HTTP methods, custom methods, query parameters, and path parameters.
-- Headers, basic authentication, bearer tokens, API keys, and OAuth 2 client credentials.
+- Headers, basic authentication, bearer tokens, API keys, and OAuth 2 client credentials or browser authorization with PKCE.
 - JSON, text, XML, SPARQL, form-urlencoded, GraphQL, multipart, and binary request bodies.
 - Bruno environments, nested variables, collection defaults, and folder defaults.
 - Status, response body, header, and response-time assertions.
@@ -100,6 +100,8 @@ Explicit overrides keep highest precedence.
 
 OAuth 2 client credentials support credentials in the token request body or Basic authentication header.
 Quinn fetches a fresh token for each request and sends it as a Bearer token.
+Authorization-code requests open the system browser and receive the redirect on a local loopback address.
+The browser step has a two-minute timeout. Provider denial cancels the request.
 See [COMPATIBILITY.md](COMPATIBILITY.md) for configuration examples and limits.
 
 ## Development

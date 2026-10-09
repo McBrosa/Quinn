@@ -7,5 +7,6 @@ pub mod variables;
 pub use error::{Error, Result};
 
 mod oauth;
+mod oauth_interactive;
 mod selectors;
 mod uploads;

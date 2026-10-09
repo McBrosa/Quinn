@@ -93,7 +93,49 @@ The configured timeout applies separately to token acquisition and the API reque
 API response timing excludes token acquisition.
 
 Only automatic token acquisition and the Authorization header are supported.
-Other grants, token sources, token placement, and OAuth additional-parameter blocks are rejected.
+Other grants (except authorization code below), token sources, token placement, and OAuth additional-parameter blocks are rejected.
+
+## OAuth 2 browser authorization
+
+The CLI and desktop support the authorization-code grant through the system browser.
+Quinn uses [PKCE S256](https://www.rfc-editor.org/rfc/rfc7636) and a [loopback redirect](https://www.rfc-editor.org/rfc/rfc8252#section-7.3).
+Set `auth: oauth2` on the request, with this block:
+
+```bru
+auth:oauth2 {
+  grant_type: authorization_code
+  authorization_url: https://identity.example.com/authorize
+  access_token_url: https://identity.example.com/token
+  callback_url: http://127.0.0.1:8765/callback
+  client_id: {{clientId}}
+  scope: read write
+  pkce: true
+  credentials_placement: body
+}
+```
+
+Register the callback URL with your identity provider before you send the request.
+The callback must use `http` and a numeric loopback IP such as `127.0.0.1` or `[::1]`.
+Quinn does not accept `localhost`, remote callbacks, custom URI schemes, or callback queries.
+Port `0` selects a free port. The default callback is `http://127.0.0.1:0/callback`.
+If your provider requires an exact redirect URI, use a fixed port.
+
+Authorization and token URLs must use HTTPS, except for numeric loopback addresses used for local development.
+
+Quinn generates fresh random state and a PKCE verifier for each request.
+It ignores the stored Bruno `state` value and rejects `pkce: false`.
+The browser URL does not include the client secret.
+Public clients can omit `client_secret` with `credentials_placement: body`.
+Confidential clients can supply `client_secret` and use `body` or `header`.
+
+The local listener checks the callback path and state. It rejects duplicate state or code parameters.
+The browser page does not display the code or token.
+Provider denial cancels authorization. Other invalid callbacks are rejected while Quinn waits for a valid one.
+The browser step times out after two minutes. Closing the browser alone does not cancel the listener.
+Ctrl+C stops the CLI. The desktop has no separate authorization-cancel button.
+
+Tokens stay in memory for the current request.
+Quinn does not support token caching, refresh, custom authorization parameters, or headless device authorization.
 
 ## Uploads
 
@@ -155,7 +197,7 @@ Failed assertions and HTTP status codes of 400 or greater fail the CLI run.
 | --- | --- |
 | Desktop request forms, tabs, syntax highlighting | `.bru` source editor only |
 | JavaScript scripts and tests | Rejected before sending |
-| OAuth | Client credentials only. Interactive authorization, token caching, and refresh flows remain unfinished. |
+| OAuth | Client credentials and browser authorization code with PKCE S256 and loopback redirects. Token caching and refresh flows remain unfinished. |
 | OAuth 1, AWS SigV4, digest, NTLM, WSSE | Not implemented |
 | Multipart requests and binary uploads | Streamed file uploads. Custom boundaries remain unfinished. |
 | gRPC and WebSockets | Not implemented |
