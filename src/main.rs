@@ -1,6 +1,6 @@
 use std::{path::PathBuf, process::ExitCode, time::Duration};
 
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use quinn_api::{Error, Result, bru::Document, collection, engine::Engine, variables::Variables};
 
 #[cfg(feature = "desktop")]
@@ -21,6 +21,15 @@ struct Args {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Import an offline export into a new Bruno collection directory.
+    Import {
+        #[arg(value_enum)]
+        format: ImportFormat,
+        /// Export file, or a text file containing one curl command.
+        source: PathBuf,
+        /// New directory. Existing paths are never overwritten.
+        destination: PathBuf,
+    },
     /// Open the native desktop client.
     Gui {
         /// Collection directory to open.
@@ -52,6 +61,13 @@ enum Command {
     Inspect { path: PathBuf },
 }
 
+#[derive(Clone, ValueEnum)]
+enum ImportFormat {
+    Postman,
+    Openapi,
+    Curl,
+}
+
 fn main() -> ExitCode {
     match run(Args::parse()) {
         Ok(true) => ExitCode::SUCCESS,
@@ -65,6 +81,25 @@ fn main() -> ExitCode {
 
 fn run(args: Args) -> Result<bool> {
     match args.command.unwrap_or(Command::Gui { path: None }) {
+        Command::Import {
+            format,
+            source,
+            destination,
+        } => {
+            let format = match format {
+                ImportFormat::Postman => quinn_api::importers::Format::Postman,
+                ImportFormat::Openapi => quinn_api::importers::Format::OpenApi,
+                ImportFormat::Curl => quinn_api::importers::Format::Curl,
+            };
+            let imported = quinn_api::importers::parse(format, &collection::read(&source)?)?;
+            imported.write_to(&destination)?;
+            println!(
+                "Imported {} requests into {}",
+                imported.requests.len(),
+                destination.display()
+            );
+            Ok(true)
+        }
         Command::Gui { path } => {
             #[cfg(feature = "desktop")]
             desktop::open(path).map_err(|reason| Error::Invalid { reason })?;

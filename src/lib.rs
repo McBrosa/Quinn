@@ -3,6 +3,7 @@ pub mod collection;
 pub mod editor;
 pub mod engine;
 pub mod error;
+pub mod importers;
 pub mod variables;
 
 pub use error::{Error, Result};

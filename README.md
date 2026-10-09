@@ -78,11 +78,34 @@ The default timeout is 30 seconds. Use `--timeout SECONDS` to change it.
 - Embedded JavaScript scripts and synchronous tests with bounded execution.
 - Response bodies, headers, timing, byte counts, and JSON reports.
 - Unary gRPC with local protobuf files and text WebSocket send/receive.
+- Offline Postman v2.1, OpenAPI 3 JSON/YAML, and cURL imports.
 
 Quinn rejects unsupported executable blocks before it sends a request.
 It does not silently skip scripts or JavaScript tests.
 TLS certificate verification remains enabled.
 Responses have a 16 MiB limit after decompression.
+
+## Import a collection
+
+Save the export or one cURL command in a local file. Then import it into a new directory:
+
+~~~sh
+quinn import postman collection.postman_collection.json ./imported-postman
+quinn import openapi openapi.yaml ./imported-openapi
+quinn import curl request.txt ./imported-curl
+quinn list ./imported-postman
+~~~
+
+Import does not send requests, execute commands, read upload files, or fetch remote references.
+The destination must not exist. Numbered filenames prevent name collisions and path traversal.
+Folders become prefixes in request names, with all request files in the collection root.
+Imported credentials and variable values remain plaintext. Review the files before you commit or share them.
+
+OpenAPI imports select the first server and prefer a JSON body example.
+Required parameters without examples use variables that you must supply before a request can run.
+Optional parameters without examples remain disabled.
+Unsupported scripts, authentication, file uploads, or parameter serialization stop the import.
+See [COMPATIBILITY.md](COMPATIBILITY.md) for the complete import limits.
 
 ## Uploads and request chains
 

@@ -335,6 +335,53 @@ Binary responses use base64 rather than lossy UTF-8; byte counts measure the ori
 The connection closes after one response. Multiple outgoing messages, binary uploads, interactive sessions, and session cookies are not implemented.
 JavaScript scripts and tests on protocol requests are rejected before connecting.
 
+## Offline imports
+
+Use `quinn import FORMAT SOURCE DESTINATION` with `postman`, `openapi`, or `curl`.
+The source is a local UTF-8 file. The input limit is 16 MiB.
+An import contains at most 10,000 requests. Postman folder nesting has a 32-level limit.
+The library exposes `importers::parse` and `ImportedCollection::write_to`.
+
+Import parses and validates all requests before creating the destination.
+The destination must not exist, including an existing symlink.
+Request names never become paths. Numbered, sanitized filenames prevent collisions.
+Collection variables become `collection.bru` defaults. Folder variables become request variables.
+Folders become name prefixes, not directories.
+On a disk write error, the new destination can contain a partial collection.
+Remove or rename that directory before retrying. Existing collections are never replaced.
+Credentials and variable values remain plaintext.
+
+Postman collection v2.1 supports HTTP requests, raw URLs, query/path parameters, disabled entries, and collection/folder/request variables.
+Authentication supports inherited basic, bearer, API key, and explicit `noauth`.
+Bodies support raw JSON/text/XML, form-urlencoded, text-only multipart, and GraphQL with JSON variables.
+Scripts/tests, other authentication, file bodies, multipart files/content types, and protocol profile behavior are rejected.
+Object/array dictionary values, string shorthand requests/headers, and other body modes are rejected.
+Response examples and descriptions are not imported. Postman environments are not imported.
+
+OpenAPI 3 JSON and YAML support operations, primitive path/query/header parameters, examples/defaults, and local JSON-pointer references.
+The importer uses the first server at the operation, path, or document level.
+Server variables use their defaults. Relative server URLs are rejected.
+Required parameters without values become unresolved Bruno variables.
+Optional parameters without values remain disabled.
+Path parameters must fill a whole URL segment.
+Authentication supports one basic, bearer, or header/query API-key requirement.
+Alternative/combined security requirements, OAuth, cookie parameters, and structured parameter serialization are rejected.
+Bodies require explicit examples or defaults. JSON content takes priority; otherwise the first content type is selected.
+JSON, text, and XML examples are supported.
+External references/examples, callback operations, and request bodies without examples are rejected.
+Response schemas, webhooks, tags, and descriptions are not converted into request behavior.
+
+cURL imports parse one POSIX-quoted command without a shell.
+Supported options are `-X/--request`, `-H/--header`, `-d/--data`, `--data-raw`, `--data-binary`, `-u/--user`, `--url`, and `-I/--head`.
+Long options accept `--option=value`. Short options need a separate value.
+Literal data uses a text body and keeps cURL's default form content type unless explicitly overridden.
+Repeated data values join with `&`. Basic credentials require an explicit password.
+Output-only silent/error flags, `--compressed`, and `-L/--location` are accepted.
+Other options, multiple URLs, interactive credentials, and `@file` input are rejected.
+Shell substitutions and environment variables are not expanded.
+Imported requests use Quinn's networking defaults, including cookies, redirects, and timeouts, rather than cURL's runtime defaults.
+Insomnia, export formats, and desktop import controls remain unfinished.
+
 ## Remaining port work
 
 | Area | Current status |
@@ -345,7 +392,7 @@ JavaScript scripts and tests on protocol requests are rejected before connecting
 | OAuth 1, AWS SigV4, digest, NTLM, WSSE | Not implemented |
 | Multipart requests and binary uploads | Streamed file uploads. Custom boundaries remain unfinished. |
 | gRPC and WebSockets | Unary RPCs with local protobuf files and one-shot WebSocket text exchange. Reflection, streaming, and interactive sessions remain unfinished. |
-| OpenAPI, Postman, Insomnia, and cURL import/export | Not implemented |
+| OpenAPI, Postman, Insomnia, and cURL import/export | Offline Postman v2.1, OpenAPI 3 JSON/YAML, and cURL imports. Insomnia and exports remain unfinished. |
 | Bruno YAML collections | Not implemented |
 | Proxy configuration, client certificates, custom CAs | No desktop configuration. reqwest handles its default networking. |
 | Bruno secret storage and integrations | Not implemented |
