@@ -15,6 +15,27 @@ use quinn_api::{collection, engine::Engine, variables::Variables};
 const COLLECTION: &str = "opencollection: 1.0.0\ninfo:\n  name: Canonical fixture\nrequest:\n  headers:\n    - name: X-Collection\n      value: inherited\n  variables:\n    - name: endpoint\n      value: /original\n";
 const REQUEST: &str = "info:\n  name: Get Users\n  type: http\n  seq: 1\nhttp:\n  method: GET\n  url: '{{baseUrl}}{{endpoint}}'\n  auth: inherit\n  params:\n    - name: search\n      value: a b\n      type: query\n    - name: unused\n      value: '{{missing}}'\n      disabled: true\n  headers:\n    - name: X-Request\n      value: request\nruntime:\n  variables:\n    - name: endpoint\n      value: /users\n  scripts:\n    - type: before-request\n      code: bru.setVar('endpoint', '/script');\n    - type: tests\n      code: test('status', () => expect(res.status).to.equal(200));\n  assertions:\n    - expression: res.body.id\n      operator: eq\n      value: '42'\n  actions:\n    - type: set-variable\n      phase: after-response\n      selector:\n        expression: res.body.id\n        method: jsonq\n      variable:\n        name: userId\n        scope: runtime\nsettings:\n  encodeUrl: true\n  timeout: 0\n  followRedirects: true\n  maxRedirects: 10\n  forwardAuthorizationHeader: false\n";
 
+#[test]
+fn shipped_yaml_example_loads_without_sending_requests() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/starter-yaml");
+    let entries = collection::discover(&root).unwrap();
+    assert_eq!(entries.len(), 1);
+    let request = collection::load(&entries[0].path).unwrap();
+    assert_eq!(
+        request.value("get", "url").unwrap().unwrap(),
+        "{{baseUrl}}/get"
+    );
+    assert_eq!(request.pairs("assert").unwrap().len(), 2);
+    let defaults = collection::defaults(&root, &entries[0].path).unwrap();
+    assert_eq!(defaults.len(), 1);
+    assert_eq!(
+        defaults[0].value("headers", "Accept").unwrap().unwrap(),
+        "application/json"
+    );
+    let values = collection::environment(&root, "Local").unwrap();
+    assert_eq!(values["baseUrl"], "http://127.0.0.1:3000");
+}
+
 fn fixture() -> tempfile::TempDir {
     let directory = tempfile::tempdir().unwrap();
     fs::create_dir(directory.path().join("users")).unwrap();

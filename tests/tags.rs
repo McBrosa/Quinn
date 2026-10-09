@@ -4,6 +4,35 @@ use std::{fs, net::TcpListener, process::Command};
 
 use quinn_api::collection;
 
+#[cfg(unix)]
+#[test]
+fn parent_symlinks_do_not_inherit_tags_from_an_unrelated_logical_collection() {
+    let root = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    fs::write(root.path().join("bruno.json"), "{}").unwrap();
+    fs::create_dir(root.path().join("nested")).unwrap();
+    fs::write(
+        root.path().join("nested/folder.bru"),
+        "meta {\n  tags: [\n    unrelated\n  ]\n}\n",
+    )
+    .unwrap();
+    fs::write(outside.path().join("bruno.json"), "{}").unwrap();
+    fs::write(
+        outside.path().join("request.bru"),
+        "get {\n  url: http://localhost\n}\n",
+    )
+    .unwrap();
+    std::os::unix::fs::symlink(outside.path(), root.path().join("nested/alias")).unwrap();
+    let request = root.path().join("nested/alias/request.bru");
+    assert_eq!(
+        collection::root(&request).unwrap(),
+        outside.path().canonicalize().unwrap()
+    );
+    let entries = collection::discover(&request).unwrap();
+    assert_eq!(entries.len(), 1);
+    assert!(entries[0].tags.is_empty());
+}
+
 fn fixture(yaml: bool) -> tempfile::TempDir {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();

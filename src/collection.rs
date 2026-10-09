@@ -45,6 +45,9 @@ pub fn discover(path: &Path) -> Result<Vec<Entry>> {
     for entry in &mut entries {
         let absolute =
             fs::canonicalize(&entry.path).map_err(|source| Error::io(&entry.path, source))?;
+        absolute
+            .strip_prefix(&root)
+            .map_err(|_| Error::invalid("request is outside the collection"))?;
         let parent = absolute
             .parent()
             .ok_or_else(|| Error::invalid("request has no parent directory"))?;

@@ -35,6 +35,9 @@ If a file changes externally, Quinn refuses to overwrite it during a save.
 The example requests use the public httpbin service.
 Only the example payloads are sent when you run them.
 
+For the YAML starter, run `quinn gui examples/starter-yaml` and use the Source editor.
+Its collection default uses httpbin. Its **Local** environment uses your own server at `http://127.0.0.1:3000`.
+
 On Debian or Ubuntu, install the desktop build dependencies first:
 
 ```sh
@@ -88,7 +91,10 @@ The default timeout is 30 seconds. Use `--timeout SECONDS` to change it.
 - Response variables that pass tokens and IDs between requests.
 - Embedded JavaScript scripts and synchronous tests with bounded execution.
 - Response bodies, headers, timing, byte counts, and JSON reports.
-- Unary gRPC with local protobuf files and text WebSocket send/receive.
+- Unary and finite streaming gRPC with local protobuf files or server reflection.
+- One-shot text WebSocket send/receive.
+- OpenCollection YAML HTTP requests with source-preserving editing and folder ordering.
+- HTTP/OAuth proxy, custom CA, and mutual TLS configuration with certificate verification enabled.
 - Offline Postman v2.1, OpenAPI 3 JSON/YAML, Insomnia v4 JSON, and cURL imports.
 - Offline Postman v2.1 and OpenAPI 3 JSON exports for supported HTTP requests.
 
