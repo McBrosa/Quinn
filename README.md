@@ -118,6 +118,7 @@ The default timeout is 30 seconds. Use `--timeout SECONDS` to change it.
 - OpenCollection YAML HTTP, GraphQL, gRPC, and one-shot WebSocket requests with source-preserving editing and folder ordering.
 - HTTP/OAuth proxy, custom CA, and mutual TLS configuration with certificate verification enabled.
 - Offline Postman v2.1, OpenAPI 3 JSON/YAML, Insomnia v4 JSON, and cURL imports.
+- OAuth 1 credentials in YAML collections and Postman imports, with inherited authentication and variable placeholders.
 - Offline Postman v2.1 and OpenAPI 3 JSON exports for supported HTTP requests.
 
 Quinn rejects unsupported executable blocks before it sends a request.

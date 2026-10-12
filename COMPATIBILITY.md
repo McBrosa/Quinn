@@ -76,6 +76,11 @@ Credential placement supports `body` and `basic_auth_header`. Token placement su
 Authorization code requires an enabled `pkce` mapping. Missing OAuth settings default automatic acquisition and refresh to true, as Bruno's converter does.
 Manual token acquisition, password/implicit flows, additional OAuth parameters, custom token prefixes, and query-token placement return errors.
 AWS v4 authentication maps explicit credentials, region, and service. Nonempty AWS profile names return errors.
+YAML OAuth1 maps explicit consumer and token credentials to the HTTP signer.
+Credential fields are `consumerKey`, `consumerSecret`, `accessToken`, and `accessTokenSecret`.
+It supports HMAC-SHA1 or HMAC-SHA256, header placement, and version `1.0`.
+Authentication can come from the request, folder, or collection. Variable placeholders remain unchanged.
+Token acquisition, private keys, custom nonce/timestamp values, and body hashes remain unsupported.
 
 Secret storage, typed variables, and inline collection `items` are not supported yet.
 Unknown executable fields return errors. Custom YAML tags, duplicate mapping keys, non-string mapping keys, and dictionary values with triple quotes also return errors.
@@ -598,11 +603,19 @@ Remove or rename that directory before retrying. Existing collections are never 
 Credentials and variable values remain plaintext.
 
 Postman collection v2.1 supports HTTP requests, raw URLs, query/path parameters, disabled entries, and collection/folder/request variables.
-Authentication supports inherited basic, Digest, bearer, API key, explicit AWS SigV4 credentials, and explicit `noauth`.
+Authentication supports inherited basic, Digest, bearer, API key, explicit AWS SigV4 or OAuth 1 credentials, and explicit `noauth`.
 Postman AWS `accessKey` and `secretKey` map to Bruno `accessKeyId` and `secretAccessKey`.
 AWS imports require explicit region and service values. Session tokens are optional. Variable placeholders remain unchanged.
 Digest imports use username and password. Custom challenge parameters and disabled or duplicate credential entries are rejected.
 AWS profiles, signature variants, query-auth placement, and other unsupported auth options are rejected before files are created.
+OAuth 1 imports map consumer credentials and optional token credentials to the HTTP signer.
+Postman uses `consumerKey`, `consumerSecret`, `token`, and `tokenSecret` for these credentials.
+HMAC-SHA1 and HMAC-SHA256 use header placement. Variable placeholders remain unchanged.
+Literal unsupported OAuth 1 algorithms, token acquisition, body hashes, and signing options return errors before destination creation.
+Values from supported string placeholders receive runtime validation before network access.
+Boolean options require JSON booleans, not strings or placeholders.
+`addParamsToHeader` accepts only true. `includeBodyHash` and `disableHeaderEncoding` accept only false. These options can also be absent.
+Explicit `addEmptyParamsToSign` is rejected because Quinn does not implement that Postman signing option.
 Bodies support raw JSON/text/XML, form-urlencoded, text-only multipart, and GraphQL with JSON variables.
 Scripts/tests, other authentication, file bodies, multipart files/content types, and protocol profile behavior are rejected.
 Object/array dictionary values, string shorthand requests/headers, and other body modes are rejected.
@@ -691,7 +704,7 @@ Custom configuration for gRPC and WebSockets, per-host certificates, and desktop
 | Multipart requests and binary uploads | Streamed file uploads. Custom boundaries remain unfinished. |
 | gRPC and WebSockets | Unary and finite streaming RPCs with local protobuf files or server reflection, plus one-shot WebSocket exchange. Interactive sessions remain unfinished. |
 | OpenAPI, Postman, Insomnia, and cURL import/export | Offline Postman v2.1, OpenAPI 3 JSON/YAML, Insomnia v4 JSON, and cURL imports. Supported HTTP subsets export to Postman v2.1 and OpenAPI 3 JSON. |
-| Bruno YAML collections | OpenCollection 1.0.0 HTTP, GraphQL, finite gRPC, and one-shot WebSocket subsets. OAuth2 and explicit AWS v4 map to existing engines. Secret storage and typed variables remain unfinished. |
+| Bruno YAML collections | OpenCollection 1.0.0 HTTP, GraphQL, finite gRPC, and one-shot WebSocket subsets. OAuth1, OAuth2, and explicit AWS v4 map to existing engines. Secret storage and typed variables remain unfinished. |
 | Proxy configuration, client certificates, custom CAs | HTTP/OAuth session configuration through CLI or library. Protocol configuration and desktop controls remain unfinished. |
 | Bruno secret storage and integrations | Not implemented |
 | Response-variable extraction and runner scripting | JSON selectors, JavaScript runtime variables, and sequential chaining; runner control remains unfinished |
