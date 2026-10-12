@@ -587,6 +587,8 @@ fn yaml_oauth1_collection_and_folder_inheritance_sign_in_cli_without_changing_so
 
 #[test]
 fn unsupported_yaml_oauth1_types_and_options_fail_before_cli_network() {
+    const SECRET: &str = "YAML_SECRET_MARKER";
+
     let directory = tempfile::tempdir().unwrap();
     fs::write(
         directory.path().join("opencollection.yml"),
@@ -658,7 +660,8 @@ fn unsupported_yaml_oauth1_types_and_options_fail_before_cli_network() {
         ),
     ]);
     for (field, value) in invalid {
-        let mut auth = serde_json::json!({"type":"oauth1", "consumerKey":"consumer", "consumerSecret":"secret"});
+        let mut auth =
+            serde_json::json!({"type":"oauth1", "consumerKey":"consumer", "consumerSecret":SECRET});
         auth[field] = value;
         let source =
             serde_yaml_ng::to_string(&serde_json::json!({"http":{"url":url, "auth":auth}}))
@@ -670,6 +673,14 @@ fn unsupported_yaml_oauth1_types_and_options_fail_before_cli_network() {
             .output()
             .unwrap();
         assert!(!result.status.success(), "{field}");
+        assert!(
+            !String::from_utf8_lossy(&result.stdout).contains(SECRET),
+            "{field}"
+        );
+        assert!(
+            !String::from_utf8_lossy(&result.stderr).contains(SECRET),
+            "{field}"
+        );
         assert_eq!(
             listener.accept().unwrap_err().kind(),
             std::io::ErrorKind::WouldBlock,
@@ -686,9 +697,9 @@ fn unsupported_yaml_oauth1_types_and_options_fail_before_cli_network() {
     .unwrap();
     for parent in ["collection", "folder"] {
         for auth in [
-            serde_json::json!({"type":"oauth1", "consumerKey":"consumer", "consumerSecret":"secret", "nonce":"custom"}),
-            serde_json::json!({"type":"oauth1", "consumerKey":"consumer", "consumerSecret":"secret", "includeBodyHash":true}),
-            serde_json::json!({"type":"oauth1", "consumerKey":false, "consumerSecret":"secret"}),
+            serde_json::json!({"type":"oauth1", "consumerKey":"consumer", "consumerSecret":SECRET, "nonce":"custom"}),
+            serde_json::json!({"type":"oauth1", "consumerKey":"consumer", "consumerSecret":SECRET, "includeBodyHash":true}),
+            serde_json::json!({"type":"oauth1", "consumerKey":false, "consumerSecret":SECRET}),
         ] {
             let defaults = serde_json::json!({"request":{"auth":auth}});
             let (collection_value, folder_value) = if parent == "collection" {
@@ -721,6 +732,14 @@ fn unsupported_yaml_oauth1_types_and_options_fail_before_cli_network() {
                 .output()
                 .unwrap();
             assert!(!result.status.success(), "{parent}");
+            assert!(
+                !String::from_utf8_lossy(&result.stdout).contains(SECRET),
+                "{parent}"
+            );
+            assert!(
+                !String::from_utf8_lossy(&result.stderr).contains(SECRET),
+                "{parent}"
+            );
             assert_eq!(
                 listener.accept().unwrap_err().kind(),
                 std::io::ErrorKind::WouldBlock,
