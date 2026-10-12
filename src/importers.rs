@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fs::{self, OpenOptions},
     io::Write,
     path::Path,
@@ -710,6 +710,7 @@ fn postman_auth(auth: Option<&Value>, request: &mut Request) -> Result<()> {
             postman_credentials(auth, kind, request)?;
             return Ok(());
         }
+        "oauth1" => return postman_oauth1(auth, request),
         _ => return Err(unsupported(format!("Postman authentication '{kind}'"))),
     };
     let pairs: BTreeMap<_, _> = postman_pairs(&auth[kind])?
@@ -827,6 +828,134 @@ fn postman_credentials(auth: &Value, kind: &str, request: &mut Request) -> Resul
             .push(((*new).into(), (*value).into(), true));
     }
     request.auth = kind.into();
+    Ok(())
+}
+
+fn postman_oauth1(auth: &Value, request: &mut Request) -> Result<()> {
+    let object = auth
+        .as_object()
+        .ok_or_else(|| invalid("Postman authentication must be an object"))?;
+    if object.keys().any(|key| key != "type" && key != "oauth1") {
+        return Err(unsupported("additional Postman OAuth 1 auth options"));
+    }
+    let keys = [
+        ("consumerKey", "consumer_key"),
+        ("consumerSecret", "consumer_secret"),
+        ("token", "access_token"),
+        ("tokenSecret", "token_secret"),
+        ("signatureMethod", "signature_method"),
+        ("realm", "realm"),
+        ("version", "version"),
+        ("callback", "callback_url"),
+        ("verifier", "verifier"),
+        ("nonce", "nonce"),
+        ("timestamp", "timestamp"),
+        ("privateKey", "private_key"),
+    ];
+    let entries = auth["oauth1"]
+        .as_array()
+        .ok_or_else(|| invalid("Postman OAuth 1 auth needs a credential array"))?;
+    let mut pairs = BTreeMap::new();
+    let mut names = BTreeSet::new();
+    for entry in entries {
+        if entry.as_object().is_none_or(|object| {
+            object.keys().any(|key| {
+                !["key", "value", "type", "disabled", "description"].contains(&key.as_str())
+            })
+        }) {
+            return Err(unsupported("additional Postman OAuth 1 credential options"));
+        }
+        let key = required(entry, "key")?;
+        if !names.insert(key) {
+            return Err(invalid("duplicate Postman OAuth 1 credential"));
+        }
+        if entry
+            .get("disabled")
+            .is_some_and(|value| value.as_bool() != Some(false))
+        {
+            return Err(unsupported("disabled Postman OAuth 1 credentials"));
+        }
+        if matches!(
+            key,
+            "addParamsToHeader" | "includeBodyHash" | "disableHeaderEncoding"
+        ) {
+            if entry
+                .get("type")
+                .is_some_and(|value| value.as_str() != Some("boolean"))
+            {
+                return Err(invalid("Postman OAuth 1 options need boolean types"));
+            }
+            let value = entry
+                .get("value")
+                .and_then(Value::as_bool)
+                .ok_or_else(|| invalid("Postman OAuth 1 options need boolean values"))?;
+            if value != (key == "addParamsToHeader") {
+                return Err(unsupported(
+                    "Postman OAuth 1 query placement, body hash, or unencoded headers",
+                ));
+            }
+            continue;
+        }
+        // Postman's empty-parameter switch changes signing semantics; do not discard it.
+        if !keys.iter().any(|(old, _)| *old == key) {
+            return Err(unsupported("additional Postman OAuth 1 auth options"));
+        }
+        if entry
+            .get("type")
+            .is_some_and(|value| value.as_str() != Some("string"))
+        {
+            return Err(invalid("Postman OAuth 1 credentials need string types"));
+        }
+        let value = entry
+            .get("value")
+            .and_then(Value::as_str)
+            .ok_or_else(|| invalid("Postman OAuth 1 credentials need string values"))?;
+        if matches!(
+            key,
+            "callback" | "verifier" | "nonce" | "timestamp" | "privateKey"
+        ) && !value.is_empty()
+        {
+            return Err(unsupported(
+                "Postman OAuth 1 acquisition, private keys, or nonce/timestamp overrides",
+            ));
+        }
+        if !value.contains("{{") {
+            if key == "signatureMethod" && !matches!(value, "" | "HMAC-SHA1" | "HMAC-SHA256") {
+                return Err(unsupported("Postman OAuth 1 signature method"));
+            }
+            if key == "version" && !matches!(value, "" | "1.0") {
+                return Err(unsupported("Postman OAuth version other than 1.0"));
+            }
+            if key == "realm" && !value.bytes().all(|byte| (b' '..=b'~').contains(&byte)) {
+                return Err(invalid(
+                    "Postman OAuth 1 realm must contain printable ASCII",
+                ));
+            }
+        }
+        pairs.insert(key, value);
+    }
+    for key in ["consumerKey", "consumerSecret"] {
+        if pairs.get(key).is_none_or(|value| value.is_empty()) {
+            return Err(invalid(format!(
+                "Postman OAuth 1 auth needs nonempty '{key}'"
+            )));
+        }
+    }
+    if pairs.get("token").is_none_or(|value| value.is_empty())
+        && pairs
+            .get("tokenSecret")
+            .is_some_and(|value| !value.is_empty())
+    {
+        return Err(invalid(
+            "Postman OAuth 1 token secret requires an access token",
+        ));
+    }
+    for (old, new) in keys {
+        if let Some(value) = pairs.get(old) {
+            request.auth_pairs.push((new.into(), (*value).into(), true));
+        }
+    }
+    request.auth = "oauth1".into();
     Ok(())
 }
 
