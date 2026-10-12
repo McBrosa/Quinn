@@ -489,6 +489,10 @@ fn authentication(document: &mut Document, value: Option<&Value>) -> Result<Stri
         oauth_blocks(document, value)?;
         return Ok(kind);
     }
+    if kind == "oauth1" {
+        oauth1_blocks(document, value)?;
+        return Ok(kind);
+    }
     let fields: &[&str] = match kind.as_str() {
         "basic" | "digest" => &["username", "password"],
         "bearer" => &["token"],
@@ -523,6 +527,55 @@ fn authentication(document: &mut Document, value: Option<&Value>) -> Result<Stri
     }
     dictionary(document, &format!("auth:{kind}"), pairs)?;
     Ok(kind)
+}
+
+fn oauth1_blocks(document: &mut Document, value: &Map<String, Value>) -> Result<()> {
+    let fields = [
+        ("consumerKey", "consumer_key"),
+        ("consumerSecret", "consumer_secret"),
+        ("accessToken", "access_token"),
+        ("accessTokenSecret", "token_secret"),
+        ("signatureMethod", "signature_method"),
+        ("realm", "realm"),
+        ("placement", "placement"),
+        ("version", "version"),
+        ("nonce", "nonce"),
+        ("timestamp", "timestamp"),
+        ("callbackUrl", "callback_url"),
+        ("verifier", "verifier"),
+    ];
+    let mut allowed: Vec<_> = fields.iter().map(|(source, _)| *source).collect();
+    allowed.extend(["type", "privateKey", "includeBodyHash"]);
+    keys(value, &allowed)?;
+    let mut pairs = Vec::new();
+    for (source, target) in fields {
+        if let Some(content) = value.get(source) {
+            let content = content.as_str().ok_or_else(|| {
+                Error::invalid(format!(
+                    "OpenCollection OAuth 1 '{source}' must be a string"
+                ))
+            })?;
+            pairs.push((target.into(), content.into(), true));
+        }
+    }
+    if let Some(private_key) = value.get("privateKey") {
+        let private_key = object(private_key, "OAuth 1 private key")?;
+        keys(private_key, &["type", "value"])?;
+        if !matches!(
+            private_key.get("type").and_then(Value::as_str),
+            Some("file" | "text")
+        ) || private_key.get("value").and_then(Value::as_str) != Some("")
+        {
+            return unsupported("OAuth 1 private keys other than an empty file or text value");
+        }
+    }
+    if let Some(include_body_hash) = value.get("includeBodyHash") {
+        if include_body_hash != &Value::Bool(false) {
+            return unsupported("OAuth 1 body-hash extension or non-boolean includeBodyHash");
+        }
+        pairs.push(("include_body_hash".into(), "false".into(), true));
+    }
+    dictionary(document, "auth:oauth1", pairs)
 }
 
 fn oauth_blocks(document: &mut Document, value: &Map<String, Value>) -> Result<()> {

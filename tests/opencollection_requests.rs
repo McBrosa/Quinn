@@ -464,3 +464,339 @@ fn invalid_selected_http_variants_fail_before_cli_network_and_oauth() {
         );
     }
 }
+
+#[test]
+fn canonical_yaml_oauth1_fields_preserve_placeholders_and_empty_private_keys() {
+    for private_key_type in ["file", "text"] {
+        let source = format!(
+            "http:\n  auth:\n    type: oauth1\n    consumerKey: '{{{{consumer}}}}'\n    consumerSecret: '{{{{secret}}}}'\n    accessToken: token\n    accessTokenSecret: token-secret\n    signatureMethod: HMAC-SHA256\n    realm: Example\n    version: '1.0'\n    placement: header\n    includeBodyHash: false\n    callbackUrl: ''\n    verifier: ''\n    nonce: ''\n    timestamp: ''\n    privateKey: {{type: {private_key_type}, value: ''}}\n"
+        );
+        let document = collection::parse(Path::new("request.yml"), &source).unwrap();
+        for (key, expected) in [
+            ("consumer_key", "{{consumer}}"),
+            ("consumer_secret", "{{secret}}"),
+            ("access_token", "token"),
+            ("token_secret", "token-secret"),
+            ("signature_method", "HMAC-SHA256"),
+            ("realm", "Example"),
+            ("version", "1.0"),
+            ("placement", "header"),
+            ("include_body_hash", "false"),
+            ("callback_url", ""),
+            ("verifier", ""),
+            ("nonce", ""),
+            ("timestamp", ""),
+        ] {
+            assert_eq!(
+                document.value("auth:oauth1", key).unwrap().as_deref(),
+                Some(expected)
+            );
+        }
+        assert_eq!(
+            document.value("get", "auth").unwrap().as_deref(),
+            Some("oauth1")
+        );
+    }
+}
+
+#[test]
+fn yaml_oauth1_collection_and_folder_inheritance_sign_in_cli_without_changing_source() {
+    let directory = tempfile::tempdir().unwrap();
+    let (url, server) = http_server(vec!["{}", "{}"]);
+    let collection_source = "# Keep collection credentials as placeholders.\nopencollection: 1.0.0\nrequest:\n  variables:\n    - {name: consumer, value: 'collection/key'}\n    - {name: secret, value: collection-secret}\n  auth:\n    type: oauth1\n    consumerKey: '{{consumer}}'\n    consumerSecret: '{{secret}}'\n    accessToken: collection-token\n    accessTokenSecret: collection-token-secret\n    realm: Collection\n    signatureMethod: ''\n    placement: ''\n    version: ''\n    nonce: ''\n    timestamp: ''\n    callbackUrl: ''\n    verifier: ''\n    privateKey: {type: text, value: ''}\n";
+    let collection_path = directory.path().join("opencollection.yml");
+    fs::write(&collection_path, collection_source).unwrap();
+    let nested = directory.path().join("nested");
+    fs::create_dir(&nested).unwrap();
+    let folder_source = "# Keep folder overrides.\ninfo: {name: Nested, type: folder}\nrequest:\n  variables:\n    - {name: consumer, value: 'folder/key'}\n    - {name: secret, value: folder-secret}\n    - {name: algorithm, value: HMAC-SHA256}\n  auth:\n    type: oauth1\n    consumerKey: '{{consumer}}'\n    consumerSecret: '{{secret}}'\n    signatureMethod: '{{algorithm}}'\n    accessToken: folder-token\n    accessTokenSecret: folder-token-secret\n    realm: Folder\n    includeBodyHash: false\n";
+    let folder_path = nested.join("folder.yml");
+    fs::write(&folder_path, folder_source).unwrap();
+    let mut paths = Vec::new();
+    for (parent, name) in [
+        (directory.path(), "collection"),
+        (nested.as_path(), "folder"),
+    ] {
+        let source = format!(
+            "# Keep request source.\ninfo: {{name: {name}, type: http}}\nhttp:\n  method: POST\n  url: '{url}/{name}?q=one&q=two'\n  auth: inherit\n  body:\n    type: form-urlencoded\n    data:\n      - {{name: item, value: 'space plus+'}}\n      - {{name: item, value: second}}\n"
+        );
+        let path = parent.join("request.yml");
+        fs::write(&path, &source).unwrap();
+        paths.push((path, source));
+    }
+    let result = Command::new(env!("CARGO_BIN_EXE_quinn"))
+        .args([
+            "run",
+            directory.path().to_str().unwrap(),
+            "--json",
+            "--no-proxy",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "{} {}",
+        String::from_utf8_lossy(&result.stdout),
+        String::from_utf8_lossy(&result.stderr)
+    );
+    for wire in server.join().unwrap() {
+        let folder = wire.starts_with("POST /folder?");
+        assert!(wire.contains("item=space+plus%2B&item=second"));
+        let header = wire
+            .lines()
+            .find_map(|line| {
+                line.strip_prefix("authorization: OAuth ")
+                    .or_else(|| line.strip_prefix("Authorization: OAuth "))
+            })
+            .unwrap();
+        assert!(header.contains(if folder {
+            "oauth_consumer_key=\"folder%2Fkey\""
+        } else {
+            "oauth_consumer_key=\"collection%2Fkey\""
+        }));
+        assert!(header.contains(if folder {
+            "oauth_token=\"folder-token\""
+        } else {
+            "oauth_token=\"collection-token\""
+        }));
+        assert!(header.contains(if folder {
+            "oauth_signature_method=\"HMAC-SHA256\""
+        } else {
+            "oauth_signature_method=\"HMAC-SHA1\""
+        }));
+        assert!(header.contains("oauth_signature=\""));
+        assert!(header.contains("oauth_nonce=\""));
+        assert!(header.contains("oauth_timestamp=\""));
+        assert!(header.contains("oauth_version=\"1.0\""));
+        assert!(header.contains(if folder {
+            "realm=\"Folder\""
+        } else {
+            "realm=\"Collection\""
+        }));
+        assert!(!header.contains("secret"));
+        assert!(!header.contains("oauth_body_hash"));
+    }
+    assert_eq!(
+        collection::read(&collection_path).unwrap(),
+        collection_source
+    );
+    assert_eq!(collection::read(&folder_path).unwrap(), folder_source);
+    for (path, source) in paths {
+        assert_eq!(collection::read(&path).unwrap(), source);
+    }
+}
+
+#[test]
+fn unsupported_yaml_oauth1_types_and_options_fail_before_cli_network() {
+    let directory = tempfile::tempdir().unwrap();
+    fs::write(
+        directory.path().join("opencollection.yml"),
+        "opencollection: 1.0.0\n",
+    )
+    .unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let mut invalid = Vec::new();
+    for field in [
+        "consumerKey",
+        "consumerSecret",
+        "accessToken",
+        "accessTokenSecret",
+        "signatureMethod",
+        "realm",
+        "placement",
+        "version",
+        "nonce",
+        "timestamp",
+        "callbackUrl",
+        "verifier",
+    ] {
+        for value in [
+            serde_json::json!(null),
+            serde_json::json!(true),
+            serde_json::json!(12),
+            serde_json::json!({}),
+        ] {
+            invalid.push((field, value));
+        }
+    }
+    invalid.extend([
+        ("unknown", serde_json::json!("value")),
+        ("signatureMethod", serde_json::json!("RSA-SHA1")),
+        ("signatureMethod", serde_json::json!("PLAINTEXT")),
+        ("placement", serde_json::json!("query")),
+        ("version", serde_json::json!("2.0")),
+        ("nonce", serde_json::json!("custom")),
+        ("timestamp", serde_json::json!("123")),
+        (
+            "callbackUrl",
+            serde_json::json!("http://localhost/callback"),
+        ),
+        ("verifier", serde_json::json!("custom")),
+        ("includeBodyHash", serde_json::json!(true)),
+        ("includeBodyHash", serde_json::json!("false")),
+        ("privateKey", serde_json::json!("")),
+        (
+            "privateKey",
+            serde_json::json!({"type":"file", "value":"key.pem"}),
+        ),
+        (
+            "privateKey",
+            serde_json::json!({"type":"text", "value":"key"}),
+        ),
+        (
+            "privateKey",
+            serde_json::json!({"type":"unknown", "value":""}),
+        ),
+        (
+            "privateKey",
+            serde_json::json!({"type":"text", "value":false}),
+        ),
+        (
+            "privateKey",
+            serde_json::json!({"type":"text", "value":"", "unknown":false}),
+        ),
+    ]);
+    for (field, value) in invalid {
+        let mut auth = serde_json::json!({"type":"oauth1", "consumerKey":"consumer", "consumerSecret":"secret"});
+        auth[field] = value;
+        let source =
+            serde_yaml_ng::to_string(&serde_json::json!({"http":{"url":url, "auth":auth}}))
+                .unwrap();
+        let path = directory.path().join("request.yml");
+        fs::write(&path, source).unwrap();
+        let result = Command::new(env!("CARGO_BIN_EXE_quinn"))
+            .args(["run", path.to_str().unwrap(), "--json", "--no-proxy"])
+            .output()
+            .unwrap();
+        assert!(!result.status.success(), "{field}");
+        assert_eq!(
+            listener.accept().unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock,
+            "{field}"
+        );
+    }
+    let nested = directory.path().join("nested");
+    fs::create_dir(&nested).unwrap();
+    let request_path = nested.join("request.yml");
+    fs::write(
+        &request_path,
+        format!("http: {{url: '{url}', auth: inherit}}\n"),
+    )
+    .unwrap();
+    for parent in ["collection", "folder"] {
+        for auth in [
+            serde_json::json!({"type":"oauth1", "consumerKey":"consumer", "consumerSecret":"secret", "nonce":"custom"}),
+            serde_json::json!({"type":"oauth1", "consumerKey":"consumer", "consumerSecret":"secret", "includeBodyHash":true}),
+            serde_json::json!({"type":"oauth1", "consumerKey":false, "consumerSecret":"secret"}),
+        ] {
+            let defaults = serde_json::json!({"request":{"auth":auth}});
+            let (collection_value, folder_value) = if parent == "collection" {
+                let mut collection_value = defaults;
+                collection_value["opencollection"] = serde_json::json!("1.0.0");
+                (
+                    collection_value,
+                    serde_json::json!({"request":{"auth":"inherit"}}),
+                )
+            } else {
+                (serde_json::json!({"opencollection":"1.0.0"}), defaults)
+            };
+            fs::write(
+                directory.path().join("opencollection.yml"),
+                serde_yaml_ng::to_string(&collection_value).unwrap(),
+            )
+            .unwrap();
+            fs::write(
+                nested.join("folder.yml"),
+                serde_yaml_ng::to_string(&folder_value).unwrap(),
+            )
+            .unwrap();
+            let result = Command::new(env!("CARGO_BIN_EXE_quinn"))
+                .args([
+                    "run",
+                    request_path.to_str().unwrap(),
+                    "--json",
+                    "--no-proxy",
+                ])
+                .output()
+                .unwrap();
+            assert!(!result.status.success(), "{parent}");
+            assert_eq!(
+                listener.accept().unwrap_err().kind(),
+                std::io::ErrorKind::WouldBlock,
+                "{parent}"
+            );
+        }
+    }
+}
+
+#[test]
+fn yaml_oauth1_does_not_follow_redirects() {
+    let directory = tempfile::tempdir().unwrap();
+    fs::write(
+        directory.path().join("opencollection.yml"),
+        "opencollection: 1.0.0\n",
+    )
+    .unwrap();
+    let destination = TcpListener::bind("127.0.0.1:0").unwrap();
+    destination.set_nonblocking(true).unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let redirect = format!("http://{}/redirected", destination.local_addr().unwrap());
+    let server = thread::spawn(move || {
+        let start = Instant::now();
+        let mut socket = loop {
+            match listener.accept() {
+                Ok((socket, _)) => break socket,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    assert!(start.elapsed() < Duration::from_secs(10));
+                    thread::sleep(Duration::from_millis(5));
+                }
+                Err(error) => panic!("{error}"),
+            }
+        };
+        socket.set_nonblocking(false).unwrap();
+        socket
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let mut wire = Vec::new();
+        let mut byte = [0];
+        while !wire.ends_with(b"\r\n\r\n") {
+            socket.read_exact(&mut byte).unwrap();
+            wire.push(byte[0]);
+            assert!(wire.len() < 65536);
+        }
+        write!(socket, "HTTP/1.1 302 Found\r\nLocation: {redirect}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
+        String::from_utf8(wire).unwrap()
+    });
+    let source = format!(
+        "http:\n  url: '{url}/signed'\n  auth: {{type: oauth1, consumerKey: consumer, consumerSecret: secret}}\n"
+    );
+    let path = directory.path().join("request.yml");
+    fs::write(&path, &source).unwrap();
+    let result = Command::new(env!("CARGO_BIN_EXE_quinn"))
+        .args(["run", path.to_str().unwrap(), "--json", "--no-proxy"])
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "{} {}",
+        String::from_utf8_lossy(&result.stdout),
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+    assert_eq!(report[0]["response"]["status"], 302);
+    assert!(
+        server
+            .join()
+            .unwrap()
+            .to_ascii_lowercase()
+            .contains("authorization: oauth ")
+    );
+    assert_eq!(
+        destination.accept().unwrap_err().kind(),
+        std::io::ErrorKind::WouldBlock
+    );
+    assert_eq!(collection::read(&path).unwrap(), source);
+}
