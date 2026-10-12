@@ -88,7 +88,7 @@ enum Command {
         #[arg(long, value_delimiter = ',')]
         exclude_tags: Vec<String>,
         #[command(flatten)]
-        network: NetworkArgs,
+        network: Box<NetworkArgs>,
     },
     /// List requests without sending them.
     List {
@@ -406,4 +406,72 @@ fn parse_variable(input: &str) -> std::result::Result<(String, String), String> 
         return Err("variable name is empty".into());
     }
     Ok((key.trim().to_owned(), value.to_owned()))
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use clap::Parser;
+
+    use super::{Args, Command};
+
+    #[test]
+    fn runner_preserves_flattened_network_arguments() {
+        let args = Args::try_parse_from([
+            "quinn",
+            "run",
+            "collection",
+            "--proxy",
+            "http://localhost:8080",
+            "--cacert",
+            "first.pem",
+            "--cacert",
+            "second.pem",
+            "--client-cert",
+            "client.pem",
+            "--client-key",
+            "client.key",
+            "--max-redirects",
+            "3",
+        ])
+        .unwrap();
+        let Some(Command::Run { network, .. }) = args.command else {
+            panic!("expected runner command");
+        };
+        let options = network.into_options();
+        assert_eq!(options.proxy.as_deref(), Some("http://localhost:8080"));
+        assert!(!options.no_proxy);
+        assert_eq!(options.ca_certificates.len(), 2);
+        assert_eq!(
+            options.client_certificate.unwrap().to_str(),
+            Some("client.pem")
+        );
+        assert_eq!(options.client_key.unwrap().to_str(), Some("client.key"));
+        assert_eq!(options.max_redirects, 3);
+    }
+
+    #[test]
+    fn runner_preserves_network_defaults_and_validation() {
+        let args = Args::try_parse_from(["quinn", "run"]).unwrap();
+        let Some(Command::Run { network, .. }) = args.command else {
+            panic!("expected runner command");
+        };
+        let options = network.into_options();
+        assert_eq!(options.max_redirects, 10);
+        assert!(options.proxy.is_none());
+        assert!(options.ca_certificates.is_empty());
+        assert!(
+            Args::try_parse_from([
+                "quinn",
+                "run",
+                "--proxy",
+                "http://localhost:8080",
+                "--no-proxy"
+            ])
+            .is_err()
+        );
+        assert!(Args::try_parse_from(["quinn", "run", "--client-cert", "client.pem"]).is_err());
+        assert!(Args::try_parse_from(["quinn", "run", "--client-key", "client.key"]).is_err());
+        assert!(Args::try_parse_from(["quinn", "run", "--max-redirects", "101"]).is_err());
+    }
 }
